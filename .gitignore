@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.env
+.env.*
+
+# 录制的真实行情响应只供本人使用，不进仓库。放在 .local-data/ 下（见 AGENTS.md）
+.local-data/
+*.gz
+*.zst
+*.parquet
+*.pkl
+*.feather
+*.arrow
