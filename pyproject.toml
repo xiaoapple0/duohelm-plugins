@@ -1,0 +1,59 @@
+[project]
+name = "duohelm-plugins"
+version = "0.0.0"
+description = "DuoHelm 官方插件的开发环境（不发布）"
+requires-python = ">=3.12"
+dependencies = [
+    "duohelm-sdk",
+    "eltdx==3.3.5",  # 固定版本：插件的行为和录制的测试数据都基于这个版本
+    "polars>=1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.8",
+    "pyright>=1.1.390",
+    "numpy>=2.0",  # 仅供类型检查：polars 的类型标注引用 numpy.ndarray
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+# duohelm-sdk 0.2（duohelm 仓库 main，含 SDK 0.2 契约）
+duohelm-sdk = { git = "https://github.com/xiaoapple0/duohelm", rev = "fc773da39b1cdc162188c5ce1aced633ccd0bc2a", subdirectory = "packages/duohelm-sdk" }
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "B", "UP", "N", "SIM", "RUF", "PTH", "DTZ", "PL", "TID",
+]
+ignore = [
+    "PLR2004",  # 测试里的魔法数字
+    "PLR0913",  # 参数个数
+    "RUF001", "RUF002", "RUF003",  # 中文全角标点
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["duohelm_eltdx"]
+
+[tool.pyright]
+include = ["plugins", "scripts"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+strict = ["plugins/eltdx/duohelm_eltdx"]
+extraPaths = ["plugins/eltdx", "plugins/eltdx/tests"]
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["plugins/eltdx/tests"]
+pythonpath = ["plugins/eltdx", "plugins/eltdx/tests"]
+addopts = "--import-mode=importlib --strict-markers"
+markers = [
+    "local_data: 需要 .local-data/ 下的本地录制文件（不进仓库）；CI 用 -m \"not local_data\" 排除",
+]
