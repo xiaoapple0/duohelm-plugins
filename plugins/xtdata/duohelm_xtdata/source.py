@@ -22,7 +22,13 @@ from collections.abc import Sequence
 from datetime import date, timedelta
 
 import polars as pl
-from duohelm_sdk import Capabilities, ConnectionStatus, EndpointNotConfiguredError, Freq
+from duohelm_sdk import (
+    AddressError,
+    Capabilities,
+    ConnectionStatus,
+    EndpointNotConfiguredError,
+    Freq,
+)
 from duohelm_sdk.adjust import EX_EVENTS_SCHEMA, factors_from_events
 from duohelm_sdk.schema import ADJ_FACTORS_SCHEMA, BARS_SCHEMA, SECURITIES_SCHEMA
 
@@ -33,6 +39,7 @@ from duohelm_xtdata.backend import (
     MissingLiveDependencyError,
     RawBar,
 )
+from duohelm_xtdata.config import ConfigError
 from duohelm_xtdata.dates import (
     SHARES_PER_VOLUME_UNIT,
     parse_yyyymmdd,
@@ -70,7 +77,8 @@ class XtdataSource:
     # ---- 连接检查（SupportsConnectionCheck） ----
 
     def check_connection(self) -> ConnectionStatus:
-        """平台在同步任务开始前调用。地址没确认、缺少依赖、连不上时返回 ok=False 和原因。"""
+        """平台在同步任务开始前调用。地址没确认、缺少依赖或 xtquant、配置文件有误、连不上时
+        返回 ok=False 和原因，不抛异常。"""
         backend = self._backend
         if not isinstance(backend, LiveBackend):
             return ConnectionStatus(ok=True, message="使用回放或测试数据，不连接 MiniQMT")
@@ -78,6 +86,8 @@ class XtdataSource:
             backend.connect()
         except (
             EndpointNotConfiguredError,
+            AddressError,
+            ConfigError,
             MissingLiveDependencyError,
             MiniQMTUnavailableError,
         ) as exc:

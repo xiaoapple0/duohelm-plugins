@@ -20,7 +20,7 @@
 | 在 DuoHelm 平台里 | 用户在插件页确认的地址（`duohelm_sdk.endpoint("miniqmt")`），`miniqmt.toml` 里的 host、port 不用。**还没确认时插件拿不到地址，不会退回到默认地址**，取数抛 `EndpointNotConfiguredError` |
 | 不在平台里（录制脚本、独立调试） | `miniqmt.toml` 里的 host、port；没有配置文件时用 `127.0.0.1:58610` |
 
-`check_connection()`（平台在同步任务开始前调用）：地址没确认、缺少 pandas / numpy、连不上 MiniQMT 时返回 `ok=False` 和原因，例如“请在 DuoHelm 插件页确认后再试”“请确认 MiniQMT 已打开并登录”。取数时连不上 MiniQMT 抛 `MiniQMTUnavailableError`。
+`check_connection()`（平台在同步任务开始前调用）：地址没确认、缺少 pandas / numpy、找不到 xtquant、`miniqmt.toml` 有误、连不上 MiniQMT 时返回 `ok=False` 和原因，例如“请在 DuoHelm 插件页确认后再试”“请确认 MiniQMT 已打开并登录”。取数时连不上 MiniQMT 抛 `MiniQMTUnavailableError`。
 
 xtquant 是原生扩展，DuoHelm 的 Python 层网络拦截管不到它的连接（DuoHelm #7）。插件只按 `endpoint()` 取地址，平台在用户确认之前不交出地址，所以确认之前插件不会去连 MiniQMT。
 

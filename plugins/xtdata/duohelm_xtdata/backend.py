@@ -37,6 +37,10 @@ LIVE_INSTALL_HINT = (
     "连接 MiniQMT 需要 pandas 和 numpy（xtquant 运行时依赖），当前环境缺少：{missing}。"
     "安装：uv sync --extra live，或 pip install pandas numpy"
 )
+XTQUANT_INSTALL_HINT = (
+    "找不到 xtquant：{exc}。请在插件目录下的 miniqmt.toml 里把 xtquant_path 设为 xtquant 所在目录"
+    "的上一级（MiniQMT 自带的或迅投官方发布的版本，不用 PyPI 上的同名包）"
+)
 
 
 class MiniQMTUnavailableError(ConnectionError):
@@ -44,7 +48,7 @@ class MiniQMTUnavailableError(ConnectionError):
 
 
 class MissingLiveDependencyError(ImportError):
-    """缺少连接 MiniQMT 所需的 pandas / numpy。"""
+    """缺少连接 MiniQMT 所需的 pandas / numpy，或找不到 xtquant。"""
 
 
 def missing_live_dependencies() -> list[str]:
@@ -123,8 +127,10 @@ class LiveBackend:
     def address(self) -> Address:
         """MiniQMT 的地址。在平台里是用户在插件页确认的地址：还没确认时抛
         ``duohelm_sdk.EndpointNotConfiguredError``，不退回到默认地址。不在平台里用本机配置。"""
-        config = self._load_config()
-        return endpoint(ENDPOINT_ID, default=config.address)
+        if in_platform():
+            # 平台里不读 miniqmt.toml 的 host、port：配置文件有误时也先提示去插件页确认
+            return endpoint(ENDPOINT_ID)
+        return endpoint(ENDPOINT_ID, default=self._load_config().address)
 
     def _load_config(self) -> MiniQMTConfig:
         if self._config is None:
@@ -148,7 +154,10 @@ class LiveBackend:
                 config = self._load_config()
                 if config.xtquant_path is not None and str(config.xtquant_path) not in sys.path:
                     sys.path.insert(0, str(config.xtquant_path))
-                from xtquant import xtdata  # pyright: ignore  # noqa: PLC0415  本机安装，测试不导入
+                try:
+                    from xtquant import xtdata  # pyright: ignore  # noqa: PLC0415  本机安装，测试不导入
+                except ImportError as exc:
+                    raise MissingLiveDependencyError(XTQUANT_INSTALL_HINT.format(exc=exc)) from exc
 
                 xt = cast(Any, xtdata)
                 xt.enable_hello = False
