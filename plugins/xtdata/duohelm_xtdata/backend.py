@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import gzip
+import importlib.util
 import json
 import sys
 import threading
@@ -24,8 +25,25 @@ from duohelm_xtdata.config import MiniQMTConfig, load_config
 BAR_FIELDS = ["time", "open", "high", "low", "close", "volume", "amount"]
 
 
+LIVE_DEPENDENCIES = ("pandas", "numpy")
+"""xtquant 运行时需要、插件本身不 import 的包（duohelm-plugins 的 ``[live]`` 可选依赖组）。"""
+LIVE_INSTALL_HINT = (
+    "连接 MiniQMT 需要 pandas 和 numpy（xtquant 运行时依赖），当前环境缺少：{missing}。"
+    "安装：uv sync --extra live，或 pip install pandas numpy"
+)
+
+
 class MiniQMTUnavailableError(ConnectionError):
     """连不上 MiniQMT。"""
+
+
+class MissingLiveDependencyError(ImportError):
+    """缺少连接 MiniQMT 所需的 pandas / numpy。"""
+
+
+def missing_live_dependencies() -> list[str]:
+    """检查 pandas、numpy 是否已安装（只查找，不 import）。"""
+    return [name for name in LIVE_DEPENDENCIES if importlib.util.find_spec(name) is None]
 
 
 @dataclass(frozen=True)
@@ -99,6 +117,11 @@ class LiveBackend:
     def _get(self) -> Any:
         with self._lock:
             if self._xt is None:
+                missing = missing_live_dependencies()
+                if missing:
+                    raise MissingLiveDependencyError(
+                        LIVE_INSTALL_HINT.format(missing="、".join(missing))
+                    )
                 config = self._config or load_config()
                 self._config = config
                 if config.xtquant_path is not None and str(config.xtquant_path) not in sys.path:

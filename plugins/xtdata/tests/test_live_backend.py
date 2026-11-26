@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import sys
 from typing import Any
 
 import pytest
 
-from duohelm_xtdata.backend import LiveBackend
+import duohelm_xtdata
+from duohelm_xtdata.backend import (
+    LiveBackend,
+    MissingLiveDependencyError,
+    missing_live_dependencies,
+)
 from duohelm_xtdata.config import MiniQMTConfig
+
+_ORIGINAL_GET = LiveBackend._get  # pyright: ignore[reportPrivateUsage]  conftest 在每个测试里替换它
 
 
 class _Frame:
@@ -48,3 +57,34 @@ def test_daily_requests_unadjusted_unfilled_bars(monkeypatch: pytest.MonkeyPatch
     assert kwargs["dividend_type"] == "none"
     assert kwargs["fill_data"] is False
     assert "xtquant" not in sys.modules
+
+
+def _hide(monkeypatch: pytest.MonkeyPatch, package: str) -> None:
+    """让 importlib.util.find_spec 报告 package 未安装。"""
+    real = importlib.util.find_spec
+
+    def find_spec(name: str, *args: Any) -> Any:
+        return None if name == package else real(name, *args)
+
+    monkeypatch.setattr(importlib.util, "find_spec", find_spec)
+
+
+def test_missing_pandas_gives_install_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """缺少 pandas 时，连接前就报错并给出安装方法；不去 import xtquant。"""
+    monkeypatch.setattr(LiveBackend, "_get", _ORIGINAL_GET)  # 撤掉 conftest 的“禁止连接”补丁
+    _hide(monkeypatch, "pandas")
+    assert missing_live_dependencies() == ["pandas"]
+    with pytest.raises(MissingLiveDependencyError, match="uv sync --extra live"):
+        LiveBackend(MiniQMTConfig()).sector("沪深A股")
+    assert "xtquant" not in sys.modules
+
+
+def test_plugin_load_warns_when_pandas_missing(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """插件加载时缺少 numpy：记一条带安装方法的警告，插件照样加载（回放数据可用）。"""
+    _hide(monkeypatch, "numpy")
+    with caplog.at_level("WARNING", logger="duohelm_xtdata"):
+        importlib.reload(duohelm_xtdata)
+    assert "numpy" in caplog.text and "uv sync --extra live" in caplog.text
+    assert duohelm_xtdata.plugin is not None

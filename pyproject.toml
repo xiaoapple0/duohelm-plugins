@@ -11,6 +11,14 @@ dependencies = [
     "tzdata>=2024.1",
 ]
 
+[project.optional-dependencies]
+# xtdata 插件连接 MiniQMT 时，xtquant 运行时需要 pandas 和 numpy（插件本身不 import 它们）。
+# 只用回放数据（测试）不需要：uv sync --extra live
+live = [
+    "pandas>=2.2",
+    "numpy>=2.0",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.3",

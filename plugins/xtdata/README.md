@@ -9,7 +9,7 @@
 ## 安装和配置
 
 1. 准备一台运行并登录着 MiniQMT 的机器（可以不是 DuoHelm 所在的机器）。
-2. xtquant 用 MiniQMT 自带的或迅投官方发布的版本，**不用 PyPI 上的同名包**。xtquant 运行时需要 pandas 和 numpy，装在 DuoHelm 的环境里。
+2. xtquant 用 MiniQMT 自带的或迅投官方发布的版本，**不用 PyPI 上的同名包**。xtquant 运行时需要 pandas 和 numpy（可选依赖组 `live`：`uv sync --extra live`），装在 DuoHelm 的环境里。缺少时插件加载会记一条带安装方法的警告，连接 MiniQMT 时抛 `MissingLiveDependencyError`；只用回放数据（测试）不需要它们。
 3. 复制 `miniqmt.example.toml` 为 `miniqmt.toml`，填写 MiniQMT 的地址和 xtquant 所在目录。`miniqmt.toml` 被 `.gitignore` 忽略，**MiniQMT 的实际地址不进任何仓库**。
 
 没有 `miniqmt.toml` 时使用默认地址 `127.0.0.1:58610`，与清单里声明的网络权限一致。连不上 MiniQMT 时，插件抛出 `MiniQMTUnavailableError`，提示打开并登录 MiniQMT。
