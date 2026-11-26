@@ -1,4 +1,4 @@
-"""eltdx 行情源：实现 duohelm-sdk 0.2 的 DataSourcePlugin。
+"""eltdx 行情源：实现 duohelm-sdk 0.3–0.4 的 DataSourcePlugin。
 
 数据特性（2026-11-25 用 eltdx 3.3.5 实测，见 DuoHelm 的 docs/subsystems/data.md）：
 

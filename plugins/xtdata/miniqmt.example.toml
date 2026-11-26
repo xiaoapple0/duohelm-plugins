@@ -3,6 +3,8 @@
 
 [miniqmt]
 # 运行并登录着 MiniQMT 的机器。MiniQMT 可以在另一台机器上。
+# host 和 port 只在不由 DuoHelm 平台运行时使用（录制脚本、独立调试）；
+# 在平台里，地址在 DuoHelm 的插件页确认。
 host = "127.0.0.1"
 port = 58610
 # xtquant 所在目录的上一级（目录里有 xtquant/ 子目录）。

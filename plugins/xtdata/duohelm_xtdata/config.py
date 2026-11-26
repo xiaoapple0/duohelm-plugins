@@ -1,8 +1,12 @@
-"""本机配置：MiniQMT 的连接地址和 xtquant 的位置。
+"""本机配置：xtquant 的位置、下载超时，以及不在平台里运行时 MiniQMT 的地址。
 
 配置文件是插件目录下的 ``miniqmt.toml``，**不提交**（被 .gitignore 忽略）；仓库里只有
-``miniqmt.example.toml``。MiniQMT 的实际地址不进任何仓库。没有配置文件时用默认值
-127.0.0.1:58610，与清单里声明的网络权限一致。
+``miniqmt.example.toml``。MiniQMT 的实际地址不进任何仓库。
+
+- 在 DuoHelm 平台里运行时：MiniQMT 的地址来自用户在插件页确认的 endpoint ``miniqmt``
+  （``duohelm_sdk.endpoint``），这里的 host、port 不使用
+- 不在平台里运行时（录制脚本、独立调试）：用这里的 host、port；没有配置文件时用
+  127.0.0.1:58610，与清单里 endpoint 的 default 一致
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ class ConfigError(ValueError):
 @dataclass(frozen=True)
 class MiniQMTConfig:
     host: str = DEFAULT_HOST
+    """只在不由平台运行时使用；在平台里用插件页确认的地址。"""
     port: int = DEFAULT_PORT
     xtquant_path: Path | None = None
     """xtquant 所在目录的上一级（目录里有 xtquant/ 子目录）。MiniQMT 自带的或迅投官方发布的
@@ -54,5 +59,8 @@ def load_config(path: Path = CONFIG_FILE) -> MiniQMTConfig:
         raise ConfigError(f"{path.name} 里的 port 应为 1–65535 的整数")
     xt_raw = section.get("xtquant_path")
     xt_path = Path(str(xt_raw)) if xt_raw else None
-    timeout = float(section.get("download_timeout_s", 60.0))
+    timeout = section.get("download_timeout_s", 60.0)
+    if isinstance(timeout, bool) or not isinstance(timeout, int | float) or timeout <= 0:
+        raise ConfigError(f"{path.name} 里的 download_timeout_s 应为正数（秒）")
+    timeout = float(timeout)
     return MiniQMTConfig(host=host, port=port, xtquant_path=xt_path, download_timeout_s=timeout)

@@ -1,6 +1,6 @@
 # eltdx 行情源插件
 
-通过 [eltdx](https://github.com/electkismet/eltdx) 3.3.5 读取通达信行情，实现 duohelm-sdk 0.2 的 `DataSourcePlugin`。
+通过 [eltdx](https://github.com/electkismet/eltdx) 3.3.5 读取通达信行情，实现 duohelm-sdk 0.3–0.4 的 `DataSourcePlugin`。
 
 ## 许可：仅限个人非商业研究
 

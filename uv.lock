@@ -55,7 +55,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "duohelm-sdk", git = "https://github.com/xiaoapple0/duohelm?subdirectory=packages%2Fduohelm-sdk&rev=fc773da39b1cdc162188c5ce1aced633ccd0bc2a" },
+    { name = "duohelm-sdk", git = "https://github.com/xiaoapple0/duohelm?subdirectory=packages%2Fduohelm-sdk&rev=9b73a330d96d9c1b753a0772692c160a1cdd413b" },
     { name = "eltdx", specifier = "==3.3.5" },
     { name = "numpy", marker = "extra == 'live'", specifier = ">=2.0" },
     { name = "pandas", marker = "extra == 'live'", specifier = ">=2.2" },
@@ -74,8 +74,8 @@ dev = [
 
 [[package]]
 name = "duohelm-sdk"
-version = "0.2.0"
-source = { git = "https://github.com/xiaoapple0/duohelm?subdirectory=packages%2Fduohelm-sdk&rev=fc773da39b1cdc162188c5ce1aced633ccd0bc2a#fc773da39b1cdc162188c5ce1aced633ccd0bc2a" }
+version = "0.4.0"
+source = { git = "https://github.com/xiaoapple0/duohelm?subdirectory=packages%2Fduohelm-sdk&rev=9b73a330d96d9c1b753a0772692c160a1cdd413b#9b73a330d96d9c1b753a0772692c160a1cdd413b" }
 dependencies = [
     { name = "packaging" },
     { name = "polars" },

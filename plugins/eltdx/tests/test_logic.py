@@ -7,7 +7,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-from duohelm_sdk import Freq, load_manifest
+from duohelm_sdk import SDK_VERSION, Freq, load_manifest
 
 from duohelm_eltdx import plugin
 from duohelm_eltdx.backend import (
@@ -86,7 +86,8 @@ def test_manifest_valid() -> None:
     m = load_manifest(PLUGIN_DIR)
     assert m.id == "eltdx"
     assert m.plugin.kind == "datasource"
-    assert m.supports_sdk("0.2.0")
+    assert m.supports_sdk(SDK_VERSION) and m.supports_sdk("0.3.0")
+    assert not m.supports_sdk("0.2.0")
     assert "static.tdx.com.cn:7615" in m.permissions.network
     assert sum(h.endswith(":7709") for h in m.permissions.network) >= 40
 

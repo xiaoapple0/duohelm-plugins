@@ -1,4 +1,7 @@
-"""MiniQMT（迅投 xtdata）行情源：实现 duohelm-sdk 0.2 的 DataSourcePlugin。
+"""MiniQMT（迅投 xtdata）行情源：实现 duohelm-sdk 0.4 的 DataSourcePlugin 和可选的连接检查。
+
+MiniQMT 的地址是清单里的 endpoint ``miniqmt``，由用户在 DuoHelm 插件页确认；确认之前
+插件拿不到地址，:meth:`XtdataSource.check_connection` 返回提示。
 
 数据特性（2026-11-25 实测，普通版，见 DuoHelm 的 docs/subsystems/data.md）：
 
@@ -19,11 +22,24 @@ from collections.abc import Sequence
 from datetime import date, timedelta
 
 import polars as pl
-from duohelm_sdk import Capabilities, Freq
+from duohelm_sdk import (
+    AddressError,
+    Capabilities,
+    ConnectionStatus,
+    EndpointNotConfiguredError,
+    Freq,
+)
 from duohelm_sdk.adjust import EX_EVENTS_SCHEMA, factors_from_events
 from duohelm_sdk.schema import ADJ_FACTORS_SCHEMA, BARS_SCHEMA, SECURITIES_SCHEMA
 
-from duohelm_xtdata.backend import Backend, LiveBackend, RawBar
+from duohelm_xtdata.backend import (
+    Backend,
+    LiveBackend,
+    MiniQMTUnavailableError,
+    MissingLiveDependencyError,
+    RawBar,
+)
+from duohelm_xtdata.config import ConfigError
 from duohelm_xtdata.dates import (
     SHARES_PER_VOLUME_UNIT,
     parse_yyyymmdd,
@@ -57,6 +73,26 @@ class XtdataSource:
         self._backend: Backend = backend if backend is not None else LiveBackend()
         self._calendar: list[date] | None = None
         self._expired: set[str] | None = None
+
+    # ---- 连接检查（SupportsConnectionCheck） ----
+
+    def check_connection(self) -> ConnectionStatus:
+        """平台在同步任务开始前调用。地址没确认、缺少依赖或 xtquant、配置文件有误、连不上时
+        返回 ok=False 和原因，不抛异常。"""
+        backend = self._backend
+        if not isinstance(backend, LiveBackend):
+            return ConnectionStatus(ok=True, message="使用回放或测试数据，不连接 MiniQMT")
+        try:
+            backend.connect()
+        except (
+            EndpointNotConfiguredError,
+            AddressError,
+            ConfigError,
+            MissingLiveDependencyError,
+            MiniQMTUnavailableError,
+        ) as exc:
+            return ConnectionStatus(ok=False, message=str(exc))
+        return ConnectionStatus(ok=True, message=f"已连接 MiniQMT（{backend.address()}）")
 
     # ---- 证券列表 ----
 
