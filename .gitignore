@@ -15,3 +15,6 @@ __pycache__/
 *.pkl
 *.feather
 *.arrow
+
+# MiniQMT 的本机配置（含实际地址），不进仓库；仓库里只有 miniqmt.example.toml
+plugins/xtdata/miniqmt.toml

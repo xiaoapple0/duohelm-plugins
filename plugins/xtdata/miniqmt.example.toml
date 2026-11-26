@@ -1,0 +1,12 @@
+# 复制为 miniqmt.toml（不提交，被 .gitignore 忽略）后按本机情况修改。
+# MiniQMT 的实际地址只写在 miniqmt.toml 里，不要写进任何仓库。
+
+[miniqmt]
+# 运行并登录着 MiniQMT 的机器。MiniQMT 可以在另一台机器上。
+host = "127.0.0.1"
+port = 58610
+# xtquant 所在目录的上一级（目录里有 xtquant/ 子目录）。
+# 用 MiniQMT 自带的或迅投官方发布的版本，不用 PyPI 上的同名包。
+xtquant_path = "D:/path/to/xtquant_release"
+# 单只证券下载的超时（秒）
+download_timeout_s = 60
