@@ -1,4 +1,4 @@
-"""eltdx 行情源：实现 duohelm-sdk 0.3–0.4 的 DataSourcePlugin。
+"""eltdx 行情源：实现 duohelm-sdk 0.4.1 起（<0.5）的 DataSourcePlugin。
 
 数据特性（2026-11-25 用 eltdx 3.3.5 实测，见 DuoHelm 的 docs/subsystems/data.md）：
 
@@ -11,8 +11,9 @@
 - 指数成分只有当前名单和纳入日期，没有调出记录
 - 拿不到摘牌日：``lookup_securities`` 的 ``delist_date`` 是最后一根有成交的 K 线的日期，
   是 SDK 口径（摘牌日之前的最后一个交易日）的**下界**。退市前停牌的证券会偏早，如中国北车
-  2015-05-06（SDK 口径 2015-05-19）、*ST二重 2014-04-28（2015-05-20）。平台优先采用能给出
-  摘牌日的数据源（xtdata），只有 eltdx 有的代码才用这里的值，并在质量报告里标为近似值
+  2015-05-06（SDK 口径 2015-05-19）、*ST二重 2014-04-28（2015-05-20）。因此声明
+  ``exact_delist_date=False``（SDK 0.4.1 起），平台把这里的退市日记为近似值
+  （数据集 ``delist_date_quality``）
 """
 
 from __future__ import annotations
@@ -56,6 +57,7 @@ class EltdxSource:
             freqs=(Freq.DAY,),
             fields=("open", "high", "low", "close", "volume", "amount"),
             lists_delisted=False,
+            exact_delist_date=False,  # 拿不到摘牌日，退市日是最后一根有成交的 K 线的日期
         )
 
     def securities(self, *, include_delisted: bool = False) -> pl.DataFrame:

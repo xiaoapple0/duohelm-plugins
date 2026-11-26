@@ -86,8 +86,9 @@ def test_manifest_valid() -> None:
     m = load_manifest(PLUGIN_DIR)
     assert m.id == "eltdx"
     assert m.plugin.kind == "datasource"
-    assert m.supports_sdk(SDK_VERSION) and m.supports_sdk("0.3.0")
-    assert not m.supports_sdk("0.2.0")
+    assert m.supports_sdk(SDK_VERSION) and m.supports_sdk("0.4.1")
+    assert not m.supports_sdk("0.4.0")  # exact_delist_date 从 0.4.1 起才有
+    assert not m.supports_sdk("0.5.0")
     assert "static.tdx.com.cn:7615" in m.permissions.network
     assert sum(h.endswith(":7709") for h in m.permissions.network) >= 40
 
@@ -99,6 +100,12 @@ def test_import_does_not_connect() -> None:
 
 
 # ---- 证券列表 ----
+
+
+def test_capabilities_declare_approximate_delist_date() -> None:
+    caps = EltdxSource(FakeBackend()).capabilities()
+    assert caps.lists_delisted is False
+    assert caps.exact_delist_date is False  # 拿不到摘牌日（duohelm-plugins#7）
 
 
 def test_include_delisted_not_supported() -> None:

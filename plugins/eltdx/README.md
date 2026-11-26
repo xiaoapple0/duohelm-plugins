@@ -1,6 +1,6 @@
 # eltdx 行情源插件
 
-通过 [eltdx](https://github.com/electkismet/eltdx) 3.3.5 读取通达信行情，实现 duohelm-sdk 0.3–0.4 的 `DataSourcePlugin`。
+通过 [eltdx](https://github.com/electkismet/eltdx) 3.3.5 读取通达信行情，实现 duohelm-sdk 0.4.1 起（<0.5）的 `DataSourcePlugin`。
 
 ## 许可：仅限个人非商业研究
 
@@ -41,7 +41,9 @@ SDK 的 `delist_date` 定义为**摘牌日之前的最后一个交易所交易�
 | 601268.SH *ST二重 | 2014-04-28 | 2015-05-20 |
 | 000527.SZ 美的电器 | 2013-08-14 | 2013-09-17 |
 
-DuoHelm 同步时优先采用能给出摘牌日的数据源（xtdata）；只有 eltdx 有的代码（如 000003.SZ）才用这里的值，并在质量报告里标为近似值。
+因此插件声明 `Capabilities.exact_delist_date=False`（duohelm-sdk 0.4.1 起），DuoHelm 同步时把 eltdx 给出的退市日记为近似值（数据集 `delist_date_quality` 的 `exact` 为 False）。用能给出摘牌日的数据源（xtdata）修正，属于 DuoHelm 的交叉核对（xiaoapple0/duohelm#32）。
+
+升级到这个版本之前同步过 eltdx 的，升级后再同步一次：平台每次都会重新查询全部退市股，把它们改为近似值。
 
 不参与复权的除权记录类别：股本变化、送配股上市、非流通股上市、转配股上市、送认沽权证（股改）等。
 
