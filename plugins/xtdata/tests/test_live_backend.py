@@ -247,8 +247,9 @@ def test_bad_config_in_platform_still_asks_for_confirmation(
 
 def test_check_connection_reports_bad_address(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(LiveBackend, "_get", _ORIGINAL_GET)
+    monkeypatch.setattr("duohelm_xtdata.backend.missing_live_dependencies", lambda: [])
     status = XtdataSource(LiveBackend(MiniQMTConfig(host="::1"))).check_connection()
-    assert status.ok is False
+    assert status.ok is False and "IPv6" in status.message
     assert "xtquant" not in sys.modules
 
 

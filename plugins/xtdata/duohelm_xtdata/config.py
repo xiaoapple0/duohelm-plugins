@@ -59,5 +59,8 @@ def load_config(path: Path = CONFIG_FILE) -> MiniQMTConfig:
         raise ConfigError(f"{path.name} 里的 port 应为 1–65535 的整数")
     xt_raw = section.get("xtquant_path")
     xt_path = Path(str(xt_raw)) if xt_raw else None
-    timeout = float(section.get("download_timeout_s", 60.0))
+    timeout = section.get("download_timeout_s", 60.0)
+    if isinstance(timeout, bool) or not isinstance(timeout, int | float) or timeout <= 0:
+        raise ConfigError(f"{path.name} 里的 download_timeout_s 应为正数（秒）")
+    timeout = float(timeout)
     return MiniQMTConfig(host=host, port=port, xtquant_path=xt_path, download_timeout_s=timeout)

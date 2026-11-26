@@ -302,6 +302,10 @@ def test_config_defaults_and_errors(tmp_path: Path) -> None:
     bad.write_text('[miniqmt]\nport = "abc"\n', encoding="utf-8")
     with pytest.raises(ConfigError):
         load_config(bad)
+    for timeout in ('"abc"', "0", "true"):
+        bad.write_text(f"[miniqmt]\ndownload_timeout_s = {timeout}\n", encoding="utf-8")
+        with pytest.raises(ConfigError, match="download_timeout_s"):
+            load_config(bad)
     good = tmp_path / "good.toml"
     good.write_text('[miniqmt]\nhost = "10.0.0.5"\nport = 58611\n', encoding="utf-8")
     assert load_config(good).address == "10.0.0.5:58611"
