@@ -1,6 +1,6 @@
 # MiniQMT 行情源插件（迅投 xtdata）
 
-通过已登录的 MiniQMT 读取 A 股行情，实现 duohelm-sdk 0.2 的 `DataSourcePlugin`。DuoHelm 的主数据源（eltdx 插件作为备用和交叉核对）。
+通过已登录的 MiniQMT 读取 A 股行情，实现 duohelm-sdk 0.4 的 `DataSourcePlugin` 和可选的 `check_connection`。DuoHelm 的主数据源（eltdx 插件作为备用和交叉核对）。
 
 ## 行情数据只供本人使用
 
@@ -10,9 +10,19 @@
 
 1. 准备一台运行并登录着 MiniQMT 的机器（可以不是 DuoHelm 所在的机器）。
 2. xtquant 用 MiniQMT 自带的或迅投官方发布的版本，**不用 PyPI 上的同名包**。xtquant 运行时需要 pandas 和 numpy（可选依赖组 `live`：`uv sync --extra live`），装在 DuoHelm 的环境里。缺少时插件加载会记一条带安装方法的警告，连接 MiniQMT 时抛 `MissingLiveDependencyError`；只用回放数据（测试）不需要它们。
-3. 复制 `miniqmt.example.toml` 为 `miniqmt.toml`，填写 MiniQMT 的地址和 xtquant 所在目录。`miniqmt.toml` 被 `.gitignore` 忽略，**MiniQMT 的实际地址不进任何仓库**。
+3. 复制 `miniqmt.example.toml` 为 `miniqmt.toml`，填写 xtquant 所在目录。`miniqmt.toml` 被 `.gitignore` 忽略，**MiniQMT 的实际地址不进任何仓库**。
+4. 在 DuoHelm 的插件页确认 MiniQMT 的地址（清单里的 endpoint `miniqmt`，scope 为 `lan`：本机或局域网的 IP 加端口）。页面预先填好默认的 `127.0.0.1:58610`，MiniQMT 在本机时一键确认即可。
 
-没有 `miniqmt.toml` 时使用默认地址 `127.0.0.1:58610`，与清单里声明的网络权限一致。连不上 MiniQMT 时，插件抛出 `MiniQMTUnavailableError`，提示打开并登录 MiniQMT。
+### MiniQMT 的地址从哪里来
+
+| 运行方式 | 地址 |
+|---|---|
+| 在 DuoHelm 平台里 | 用户在插件页确认的地址（`duohelm_sdk.endpoint("miniqmt")`），`miniqmt.toml` 里的 host、port 不用。**还没确认时插件拿不到地址，不会退回到默认地址**，取数抛 `EndpointNotConfiguredError` |
+| 不在平台里（录制脚本、独立调试） | `miniqmt.toml` 里的 host、port；没有配置文件时用 `127.0.0.1:58610` |
+
+`check_connection()`（平台在同步任务开始前调用）：地址没确认、缺少 pandas / numpy、连不上 MiniQMT 时返回 `ok=False` 和原因，例如“请在 DuoHelm 插件页确认后再试”“请确认 MiniQMT 已打开并登录”。取数时连不上 MiniQMT 抛 `MiniQMTUnavailableError`。
+
+xtquant 是原生扩展，DuoHelm 的 Python 层网络拦截管不到它的连接（DuoHelm #7）。插件只按 `endpoint()` 取地址，平台在用户确认之前不交出地址，所以确认之前插件不会去连 MiniQMT。
 
 ## 提供的数据
 
@@ -42,7 +52,8 @@ xtdata 的 `volume` 单位是手。2026-11-25 按证券类型与 eltdx（成交�
 
 测试不连接 MiniQMT，也不 import xtquant：
 
-- `tests/test_logic.py`：手工构造的数据，覆盖日期换算（含非东八区时区、1991 年夏令时）、按类型的成交量单位、停牌占位行、证券列表、复权、配置文件
+- `tests/test_logic.py`：手工构造的数据，覆盖日期换算（含非东八区时区、1991 年夏令时）、按类型的成交量单位、停牌占位行、证券列表、复权、配置文件、清单
+- `tests/test_live_backend.py`：用假的 xtdata 对象检查传给 xtdata 的参数；MiniQMT 地址的来源（平台里确认的地址、没确认时不退回默认地址）和 `check_connection`
 - `tests/test_replay.py`（`local_data` 标记）：回放本地录制的真实响应，运行 SDK 的契约检查，并在美东时区下断言已知日期
 
 录制文件只放在本地 `.local-data/xtdata/`（被 `.gitignore` 忽略，不进仓库）。**重新录制需要连接 MiniQMT**：

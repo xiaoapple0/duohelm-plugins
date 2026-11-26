@@ -1,5 +1,7 @@
 """录制 xtdata 插件测试用的真实响应。**需要连接 MiniQMT**（地址见插件目录下的 miniqmt.toml）。
 
+脚本不在 DuoHelm 平台里运行，所以用 miniqmt.toml 里的地址，不用插件页确认的地址。
+
 用法（在仓库根目录）：
 
     uv run python scripts/capture_xtdata.py
