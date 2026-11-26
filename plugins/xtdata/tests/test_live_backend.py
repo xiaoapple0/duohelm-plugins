@@ -5,17 +5,22 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import sys
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from duohelm_sdk import Address, EndpointNotConfiguredError
+from duohelm_sdk import context as sdk_context
 
 import duohelm_xtdata
 from duohelm_xtdata.backend import (
     LiveBackend,
+    MiniQMTUnavailableError,
     MissingLiveDependencyError,
     missing_live_dependencies,
 )
 from duohelm_xtdata.config import MiniQMTConfig
+from duohelm_xtdata.source import XtdataSource
 
 _ORIGINAL_GET = LiveBackend._get  # pyright: ignore[reportPrivateUsage]  conftest 在每个测试里替换它
 
@@ -77,6 +82,75 @@ def test_missing_pandas_gives_install_hint(monkeypatch: pytest.MonkeyPatch) -> N
     with pytest.raises(MissingLiveDependencyError, match="uv sync --extra live"):
         LiveBackend(MiniQMTConfig()).sector("沪深A股")
     assert "xtquant" not in sys.modules
+
+
+# ---- MiniQMT 的地址和连接检查 ----
+
+
+@pytest.fixture
+def platform() -> Iterator[None]:
+    """模拟在 DuoHelm 平台里运行；结束后恢复为不在平台里。"""
+    yield
+    sdk_context._reset()  # pyright: ignore[reportPrivateUsage]
+
+
+def _in_platform(confirmed: dict[str, Address]) -> None:
+    sdk_context._install(confirmed, unconfirmed=["miniqmt"])  # pyright: ignore[reportPrivateUsage]
+
+
+def test_address_outside_platform_from_config() -> None:
+    backend = LiveBackend(MiniQMTConfig(host="10.0.0.5", port=58611))
+    assert backend.address() == Address("10.0.0.5", 58611)
+
+
+@pytest.mark.usefixtures("platform")
+def test_address_in_platform_ignores_config() -> None:
+    """在平台里用插件页确认的地址，miniqmt.toml 里的地址不用。"""
+    _in_platform({"miniqmt": Address("192.168.31.5", 58610)})
+    backend = LiveBackend(MiniQMTConfig(host="10.0.0.5", port=58611))
+    assert backend.address() == Address("192.168.31.5", 58610)
+
+
+@pytest.mark.usefixtures("platform")
+def test_unconfirmed_endpoint_does_not_fall_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """在平台里、地址没确认：不退回到默认地址或 miniqmt.toml，不 import xtquant。"""
+    monkeypatch.setattr(LiveBackend, "_get", _ORIGINAL_GET)  # 撤掉 conftest 的“禁止连接”补丁
+    _in_platform({})
+    backend = LiveBackend(MiniQMTConfig())
+    with pytest.raises(EndpointNotConfiguredError, match="插件页确认"):
+        backend.address()
+    with pytest.raises(EndpointNotConfiguredError, match="插件页确认"):
+        backend.sector("沪深A股")
+    status = XtdataSource(backend).check_connection()
+    assert status.ok is False and "插件页确认" in status.message
+    assert "xtquant" not in sys.modules
+
+
+def test_check_connection_reports_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unavailable(self: LiveBackend) -> object:
+        raise MiniQMTUnavailableError(
+            "连不上 MiniQMT（127.0.0.1:58610）：请确认 MiniQMT 已打开并登录"
+        )
+
+    monkeypatch.setattr(LiveBackend, "_get", unavailable)
+    status = XtdataSource(LiveBackend(MiniQMTConfig())).check_connection()
+    assert status.ok is False and "已打开并登录" in status.message
+
+
+def test_check_connection_reports_missing_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(LiveBackend, "_get", _ORIGINAL_GET)
+    _hide(monkeypatch, "pandas")
+    status = XtdataSource(LiveBackend(MiniQMTConfig())).check_connection()
+    assert status.ok is False and "uv sync --extra live" in status.message
+    assert "xtquant" not in sys.modules
+
+
+def test_check_connection_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(LiveBackend, "_get", lambda self: object())  # pyright: ignore[reportUnknownLambdaType]
+    status = XtdataSource(LiveBackend(MiniQMTConfig())).check_connection()
+    assert status.ok is True and "127.0.0.1:58610" in status.message
 
 
 def test_plugin_load_warns_when_pandas_missing(

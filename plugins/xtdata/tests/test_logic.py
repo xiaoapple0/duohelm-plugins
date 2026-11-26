@@ -10,10 +10,10 @@ from zoneinfo import ZoneInfo
 
 import polars as pl
 import pytest
-from duohelm_sdk import Freq, load_manifest
+from duohelm_sdk import SDK_VERSION, Freq, load_manifest
 
 from duohelm_xtdata import plugin
-from duohelm_xtdata.backend import Instrument, LiveBackend, RawBar, RawDivid
+from duohelm_xtdata.backend import ENDPOINT_ID, Instrument, LiveBackend, RawBar, RawDivid
 from duohelm_xtdata.config import ConfigError, load_config
 from duohelm_xtdata.dates import (
     SHARES_PER_VOLUME_UNIT,
@@ -275,16 +275,22 @@ def test_index_constituents_current_only() -> None:
 # ---- 清单、配置、导入 ----
 
 
-def test_manifest_declares_only_default_address() -> None:
+def test_manifest_declares_miniqmt_endpoint() -> None:
+    """MiniQMT 是用户确认的 endpoint（lan 范围），不写在 network 里（SDK 0.4 起只允许公网）。"""
     m = load_manifest(PLUGIN_DIR)
     assert m.id == "xtdata"
     assert m.plugin.kind == "datasource"
-    assert m.supports_sdk("0.2.0")
-    assert m.permissions.network == ("127.0.0.1:58610",)
+    assert m.supports_sdk(SDK_VERSION)
+    assert m.supports_sdk("0.4.0") and not m.supports_sdk("0.3.0")
+    assert m.permissions.network == ()
+    (ep,) = m.permissions.endpoints
+    assert (ep.id, ep.default, str(ep.scope)) == (ENDPOINT_ID, "127.0.0.1:58610", "lan")
 
 
 def test_no_real_address_committed() -> None:
     """仓库里只有示例配置；示例配置和清单里只有默认的本机地址。"""
+    manifest = (PLUGIN_DIR / "duohelm-plugin.toml").read_text(encoding="utf-8")
+    assert 'default = "127.0.0.1:58610"' in manifest
     example = (PLUGIN_DIR / "miniqmt.example.toml").read_text(encoding="utf-8")
     assert 'host = "127.0.0.1"' in example
     assert load_config(PLUGIN_DIR / "miniqmt.example.toml").host == "127.0.0.1"

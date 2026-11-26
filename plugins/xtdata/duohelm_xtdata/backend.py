@@ -4,7 +4,8 @@
 （手）和原始价格。日期按 Asia/Shanghai 换算、单位换算都在插件逻辑里做，回放测试因此能
 覆盖它们。
 
-- :class:`LiveBackend` 连接 MiniQMT（地址来自本机配置文件），只有它会 import xtquant
+- :class:`LiveBackend` 连接 MiniQMT（在平台里用插件页确认的地址，否则用本机配置文件），
+  只有它会 import xtquant
 - :class:`RecordingBackend` 包在 LiveBackend 外面记录每次调用的结果
 - :class:`ReplayBackend` 从录制文件回放；测试只用它和手工构造的后端，不 import xtquant
 """
@@ -20,9 +21,14 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+from duohelm_sdk import Address, endpoint
+from duohelm_sdk.context import in_platform
+
 from duohelm_xtdata.config import MiniQMTConfig, load_config
 
 BAR_FIELDS = ["time", "open", "high", "low", "close", "volume", "amount"]
+ENDPOINT_ID = "miniqmt"
+"""清单 ``[[permissions.endpoints]]`` 里 MiniQMT 的 id。"""
 
 
 LIVE_DEPENDENCIES = ("pandas", "numpy")
@@ -114,16 +120,32 @@ class LiveBackend:
         self._xt: Any = None
         self._lock = threading.Lock()
 
+    def address(self) -> Address:
+        """MiniQMT 的地址。在平台里是用户在插件页确认的地址：还没确认时抛
+        ``duohelm_sdk.EndpointNotConfiguredError``，不退回到默认地址。不在平台里用本机配置。"""
+        config = self._load_config()
+        return endpoint(ENDPOINT_ID, default=config.address)
+
+    def _load_config(self) -> MiniQMTConfig:
+        if self._config is None:
+            self._config = load_config()
+        return self._config
+
+    def connect(self) -> None:
+        """连接 MiniQMT（已连接时什么都不做）。连接检查用。"""
+        self._get()
+
     def _get(self) -> Any:
         with self._lock:
             if self._xt is None:
+                # 先取地址：平台里没确认时直接报错，不 import xtquant
+                address = self.address()
                 missing = missing_live_dependencies()
                 if missing:
                     raise MissingLiveDependencyError(
                         LIVE_INSTALL_HINT.format(missing="、".join(missing))
                     )
-                config = self._config or load_config()
-                self._config = config
+                config = self._load_config()
                 if config.xtquant_path is not None and str(config.xtquant_path) not in sys.path:
                     sys.path.insert(0, str(config.xtquant_path))
                 from xtquant import xtdata  # pyright: ignore  # noqa: PLC0415  本机安装，测试不导入
@@ -131,12 +153,17 @@ class LiveBackend:
                 xt = cast(Any, xtdata)
                 xt.enable_hello = False
                 try:
-                    xt.connect(ip=config.host, port=config.port)
+                    xt.connect(ip=address.host, port=address.port)
                     xt.get_trading_dates("SH", count=1)
                 except Exception as exc:
+                    where = (
+                        "DuoHelm 插件页里确认的地址"
+                        if in_platform()
+                        else "插件目录下 miniqmt.toml 里的地址"
+                    )
                     raise MiniQMTUnavailableError(
-                        f"连不上 MiniQMT（{config.address}）：请确认 MiniQMT 已打开并登录，"
-                        f"以及插件目录下 miniqmt.toml 里的地址：{exc}"
+                        f"连不上 MiniQMT（{address}）：请确认 MiniQMT 已打开并登录，"
+                        f"以及{where}：{exc}"
                     ) from exc
                 self._xt = xt
             return self._xt
