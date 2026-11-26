@@ -9,6 +9,10 @@
   按比例计算（``duohelm_sdk.adjust.factors_from_events``）
 - 没有交易日历接口：用上证指数和深证成指的日线推出交易日，取并集
 - 指数成分只有当前名单和纳入日期，没有调出记录
+- 拿不到摘牌日：``lookup_securities`` 的 ``delist_date`` 是最后一根有成交的 K 线的日期，
+  是 SDK 口径（摘牌日之前的最后一个交易日）的**下界**。退市前停牌的证券会偏早，如中国北车
+  2015-05-06（SDK 口径 2015-05-19）、*ST二重 2014-04-28（2015-05-20）。平台优先采用能给出
+  摘牌日的数据源（xtdata），只有 eltdx 有的代码才用这里的值，并在质量报告里标为近似值
 """
 
 from __future__ import annotations
@@ -68,7 +72,8 @@ class EltdxSource:
         rows: list[tuple[object, ...]] = []
         for symbol in dict.fromkeys(symbols):
             code = to_eltdx(symbol)
-            bars = self._history(code, "delisted")
+            # 上市日、退市日只看有成交的 K 线，与 bars() 一致：成交量为 0 的是停牌占位行
+            bars = [b for b in self._history(code, "delisted") if b.volume > 0]
             if not bars:
                 continue  # 数据源没有这个代码
             is_listed = code in listed
@@ -79,6 +84,8 @@ class EltdxSource:
                     exchange_of(symbol),
                     "stock",
                     bars[0].date,
+                    # 近似值：eltdx 拿不到摘牌日，只能给出最后一根有成交的 K 线。SDK 的
+                    # delist_date 是摘牌日之前的最后一个交易日，退市前停牌的证券会比这里晚
                     None if is_listed else bars[-1].date,
                 )
             )

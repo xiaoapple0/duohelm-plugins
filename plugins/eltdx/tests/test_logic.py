@@ -118,6 +118,29 @@ def test_lookup_routes_and_dates() -> None:
     assert got["000001.SZ"]["name"] == "平安银行"
 
 
+def test_lookup_dates_ignore_zero_volume_placeholders() -> None:
+    """上市日、退市日只看有成交的 K 线：首尾的停牌占位行（成交量为 0）不算。"""
+    d = days(date(2014, 4, 21), 6)
+    fake = FakeBackend()
+    fake.series[("sh601268", "delisted")] = [
+        bar(d[0], volume=0.0),
+        bar(d[1]),
+        bar(d[2]),
+        bar(d[3]),
+        bar(d[4], volume=0.0),
+        bar(d[5], volume=0.0),
+    ]
+    row = EltdxSource(fake).lookup_securities(["601268.SH"]).row(0, named=True)
+    assert row["list_date"] == d[1]
+    assert row["delist_date"] == d[3]
+
+
+def test_lookup_skips_code_with_only_placeholders() -> None:
+    fake = FakeBackend()
+    fake.series[("sh601268", "delisted")] = [bar(date(2014, 4, 21), volume=0.0)]
+    assert EltdxSource(fake).lookup_securities(["601268.SH"]).height == 0
+
+
 # ---- 日线 ----
 
 
