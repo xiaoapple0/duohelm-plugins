@@ -7,6 +7,16 @@ dependencies = [
     "duohelm-sdk",
     "eltdx==3.3.5",  # 固定版本：插件的行为和录制的测试数据都基于这个版本
     "polars>=1.0",
+    # Windows 上的 Python 没有自带时区数据库：日期要按 Asia/Shanghai 换算（含 1986–1991 年夏令时）
+    "tzdata>=2024.1",
+]
+
+[project.optional-dependencies]
+# xtdata 插件连接 MiniQMT 时，xtquant 运行时需要 pandas 和 numpy（插件本身不 import 它们）。
+# 只用回放数据（测试）不需要：uv sync --extra live
+live = [
+    "pandas>=2.2",
+    "numpy>=2.0",
 ]
 
 [dependency-groups]
@@ -39,20 +49,20 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["duohelm_eltdx"]
+known-first-party = ["duohelm_eltdx", "duohelm_xtdata"]
 
 [tool.pyright]
 include = ["plugins", "scripts"]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"
-strict = ["plugins/eltdx/duohelm_eltdx"]
-extraPaths = ["plugins/eltdx", "plugins/eltdx/tests"]
+strict = ["plugins/eltdx/duohelm_eltdx", "plugins/xtdata/duohelm_xtdata"]
+extraPaths = ["plugins/eltdx", "plugins/eltdx/tests", "plugins/xtdata", "plugins/xtdata/tests"]
 venvPath = "."
 venv = ".venv"
 
 [tool.pytest.ini_options]
-testpaths = ["plugins/eltdx/tests"]
-pythonpath = ["plugins/eltdx", "plugins/eltdx/tests"]
+testpaths = ["plugins/eltdx/tests", "plugins/xtdata/tests"]
+pythonpath = ["plugins/eltdx", "plugins/eltdx/tests", "plugins/xtdata", "plugins/xtdata/tests"]
 addopts = "--import-mode=importlib --strict-markers"
 markers = [
     "local_data: 需要 .local-data/ 下的本地录制文件（不进仓库）；CI 用 -m \"not local_data\" 排除",

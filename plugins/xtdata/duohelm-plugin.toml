@@ -1,0 +1,14 @@
+[plugin]
+id = "xtdata"
+name = "MiniQMT 行情源（迅投 xtdata）"
+version = "0.1.0"
+kind = "datasource"
+sdk = ">=0.2,<0.3"
+author = "DuoHelm"
+description = "通过已登录的 MiniQMT 读取 A 股日线（含退市股）、除权数据、交易日和当前指数成分。行情数据只供本人使用，见 README。"
+entrypoint = "duohelm_xtdata:plugin"
+
+[permissions]
+# MiniQMT 的默认地址。实际地址写在插件目录下的 miniqmt.toml（不提交），不进任何仓库；
+# 用户配置连接地址的网络放行流程随 DuoHelm 的同步任务设计。
+network = ["127.0.0.1:58610"]
