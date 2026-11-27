@@ -149,6 +149,28 @@ def test_lookup_dates_ignore_zero_volume_placeholders() -> None:
     assert row["delist_date"] == d[3]
 
 
+def test_lookup_delist_date_with_mid_suspension_and_trailing_placeholders() -> None:
+    """中间停牌不影响；末尾多根占位行时，退市日取最后一根有成交的 K 线；在市股票不给退市日。"""
+    d = days(date(2014, 4, 21), 8)
+    fake = FakeBackend()
+    fake.series[("sh601268", "delisted")] = [
+        bar(d[0]),
+        bar(d[1], volume=0.0),  # 中间停牌
+        bar(d[2], volume=0.0),
+        bar(d[3]),
+        bar(d[4], volume=0.0),  # 末尾占位行
+        bar(d[5], volume=0.0),
+        bar(d[6], volume=0.0),
+        bar(d[7], volume=0.0),
+    ]
+    fake.series[("sz000001", "delisted")] = [bar(d[0]), bar(d[1]), bar(d[2], volume=0.0)]
+    df = EltdxSource(fake).lookup_securities(["601268.SH", "000001.SZ"])
+    got = {r["symbol"]: r for r in df.iter_rows(named=True)}
+    assert got["601268.SH"]["delist_date"] == d[3]
+    assert got["000001.SZ"]["delist_date"] is None
+    assert got["000001.SZ"]["list_date"] == d[0]
+
+
 def test_lookup_skips_code_with_only_placeholders() -> None:
     fake = FakeBackend()
     fake.series[("sh601268", "delisted")] = [bar(date(2014, 4, 21), volume=0.0)]

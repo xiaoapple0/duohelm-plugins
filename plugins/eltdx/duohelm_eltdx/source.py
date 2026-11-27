@@ -16,6 +16,7 @@
   2015-05-06（SDK 口径 2015-05-19）、*ST二重 2014-04-28（2015-05-20）。因此声明
   ``exact_delist_date=False``（SDK 0.4.1 起），平台把这里的退市日记为近似值
   （数据集 ``delist_date_quality``）
+  同一证券有精确数据源（xtdata）时，平台以精确的为准。算退市日前先丢掉成交量为 0 的占位行
 """
 
 from __future__ import annotations
