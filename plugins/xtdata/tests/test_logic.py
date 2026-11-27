@@ -449,3 +449,11 @@ def test_import_does_not_touch_xtquant() -> None:
     assert isinstance(backend, LiveBackend)
     assert backend._xt is None  # pyright: ignore[reportPrivateUsage]
     assert "xtquant" not in sys.modules
+
+
+def test_lookup_expired_code_without_instrument_raises_lookup_failed() -> None:
+    """代码在过期列表里、合约信息却是空：数据源自相矛盾，不能记成“确定没有”。"""
+    fake = _lookup_backend()
+    del fake.instruments["600087.SH"]
+    with pytest.raises(LookupFailedError):
+        XtdataSource(fake).lookup_securities(["600087.SH"])

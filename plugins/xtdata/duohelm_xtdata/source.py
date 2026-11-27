@@ -136,6 +136,8 @@ class XtdataSource:
         for symbol in codes:
             info = self._backend.instrument(symbol)
             if info is None:
+                if strict and symbol in expired:
+                    raise ValueError(f"{symbol} 在过期列表里，但 MiniQMT 没有它的合约信息")
                 missing += 1
                 continue
             delist = None
