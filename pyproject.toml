@@ -31,8 +31,8 @@ dev = [
 package = false
 
 [tool.uv.sources]
-# duohelm-sdk 0.4.1（duohelm 仓库 main，含 Capabilities.exact_delist_date，xiaoapple0/duohelm#40）
-duohelm-sdk = { git = "https://github.com/xiaoapple0/duohelm", rev = "6083b8b3c42d50fdb30e4583d5ffc524eb2a6243", subdirectory = "packages/duohelm-sdk" }
+# duohelm-sdk 0.4.2（duohelm 仓库 main，含 LookupFailedError，xiaoapple0/duohelm#56）
+duohelm-sdk = { git = "https://github.com/xiaoapple0/duohelm", rev = "f3786e3d26acc7577fadac16d11ae01300110b7b", subdirectory = "packages/duohelm-sdk" }
 
 [tool.ruff]
 line-length = 100

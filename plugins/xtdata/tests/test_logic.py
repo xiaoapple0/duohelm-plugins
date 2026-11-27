@@ -10,10 +10,24 @@ from zoneinfo import ZoneInfo
 
 import polars as pl
 import pytest
-from duohelm_sdk import SDK_VERSION, Freq, load_manifest
+from duohelm_sdk import (
+    SDK_VERSION,
+    EndpointNotConfiguredError,
+    Freq,
+    LookupFailedError,
+    load_manifest,
+)
+from duohelm_sdk.schema import SECURITIES_SCHEMA
 
 from duohelm_xtdata import plugin
-from duohelm_xtdata.backend import ENDPOINT_ID, Instrument, LiveBackend, RawBar, RawDivid
+from duohelm_xtdata.backend import (
+    ENDPOINT_ID,
+    Instrument,
+    LiveBackend,
+    MiniQMTUnavailableError,
+    RawBar,
+    RawDivid,
+)
 from duohelm_xtdata.config import ConfigError, load_config
 from duohelm_xtdata.dates import (
     SHARES_PER_VOLUME_UNIT,
@@ -219,9 +233,128 @@ def test_securities_include_delisted() -> None:
 
 def test_lookup_skips_unknown_codes() -> None:
     fake = FakeBackend()
+    fake.expired = ["600087.SH"]  # 过期列表不为空，查询才可信
     fake.instruments = {"000001.SZ": Instrument("000001.SZ", "平安银行", "19910403", None)}
     df = XtdataSource(fake).lookup_securities(["000001.SZ", "000003.SZ"])
     assert df["symbol"].to_list() == ["000001.SZ"]
+
+
+# ---- lookup_securities 查询失败：抛 LookupFailedError，不返回空或部分结果 ----
+
+
+class _BoomError(RuntimeError):
+    pass
+
+
+def _lookup_backend() -> FakeBackend:
+    fake = FakeBackend()
+    fake.expired = ["600087.SH"]
+    fake.dates = [date(2014, 6, 3), date(2014, 6, 4), date(2014, 6, 5)]
+    fake.instruments = {
+        "000001.SZ": Instrument("000001.SZ", "平安银行", "19910403", "99999999"),
+        "600087.SH": Instrument("600087.SH", "退市长油", "19970612", "20140605"),
+    }
+    return fake
+
+
+def test_lookup_connection_failure_raises_lookup_failed() -> None:
+    fake = _lookup_backend()
+    boom = MiniQMTUnavailableError("连不上 MiniQMT")
+
+    def broken() -> list[str]:
+        raise boom
+
+    fake.expired_a_shares = broken  # type: ignore[method-assign]
+    with pytest.raises(LookupFailedError) as info:
+        XtdataSource(fake).lookup_securities(["000001.SZ"])
+    assert info.value.__cause__ is boom
+
+
+def test_lookup_instrument_error_raises_lookup_failed() -> None:
+    fake = _lookup_backend()
+
+    def broken(symbol: str) -> Instrument | None:
+        raise _BoomError("接口报错")
+
+    fake.instrument = broken  # type: ignore[method-assign]
+    with pytest.raises(LookupFailedError) as info:
+        XtdataSource(fake).lookup_securities(["000001.SZ"])
+    assert isinstance(info.value.__cause__, _BoomError)
+
+
+def test_lookup_partial_failure_raises_instead_of_partial_result() -> None:
+    """第一个代码查到了、第二个代码出错：整体抛异常，不返回只含第一个代码的结果。"""
+    fake = _lookup_backend()
+    original = fake.instrument
+
+    def flaky(symbol: str) -> Instrument | None:
+        if symbol == "600087.SH":
+            raise TimeoutError("超时")
+        return original(symbol)
+
+    fake.instrument = flaky  # type: ignore[method-assign]
+    with pytest.raises(LookupFailedError) as info:
+        XtdataSource(fake).lookup_securities(["000001.SZ", "600087.SH"])
+    assert isinstance(info.value.__cause__, TimeoutError)
+
+
+def test_lookup_calendar_failure_raises_lookup_failed() -> None:
+    fake = _lookup_backend()
+
+    def broken(market: str) -> list[int]:
+        raise _BoomError("交易日取不到")
+
+    fake.trading_dates = broken  # type: ignore[method-assign]
+    with pytest.raises(LookupFailedError):
+        XtdataSource(fake).lookup_securities(["600087.SH"])
+
+
+def test_lookup_endpoint_not_configured_raises_lookup_failed() -> None:
+    fake = _lookup_backend()
+    exc = EndpointNotConfiguredError("请到插件页确认 MiniQMT 地址")
+
+    def broken(symbol: str) -> Instrument | None:
+        raise exc
+
+    fake.instrument = broken  # type: ignore[method-assign]
+    with pytest.raises(LookupFailedError) as info:
+        XtdataSource(fake).lookup_securities(["000001.SZ"])
+    assert info.value.__cause__ is exc
+    assert "插件页" in str(info.value)  # 原因的说明要带给用户
+
+
+def test_lookup_expired_without_delist_date_raises_lookup_failed() -> None:
+    """已过期的合约算不出退市日（交易日历为空）：不能当成在市返回。"""
+    fake = _lookup_backend()
+    fake.dates = []
+    with pytest.raises(LookupFailedError):
+        XtdataSource(fake).lookup_securities(["600087.SH"])
+
+
+def test_lookup_empty_expired_list_raises_lookup_failed() -> None:
+    fake = _lookup_backend()
+    fake.expired = []
+    with pytest.raises(LookupFailedError):
+        XtdataSource(fake).lookup_securities(["600087.SH"])
+
+
+def test_lookup_confirmed_absent_returns_empty_without_raising() -> None:
+    """MiniQMT 正常返回“没有这个合约”：确认没有，返回空表，不抛异常。"""
+    df = XtdataSource(_lookup_backend()).lookup_securities(["000003.SZ"])
+    assert df.height == 0
+    assert dict(df.schema) == SECURITIES_SCHEMA
+
+
+def test_securities_failure_is_not_converted() -> None:
+    """只有 lookup_securities 抛 LookupFailedError，securities 的失败保持原异常。"""
+    fake = _lookup_backend()
+
+    def broken(name: str) -> list[str]:
+        raise _BoomError("板块取不到")
+
+    fake.sector = broken  # type: ignore[method-assign]
+    with pytest.raises(_BoomError):
+        XtdataSource(fake).securities()
 
 
 # ---- 复权因子 ----
@@ -281,7 +414,7 @@ def test_manifest_declares_miniqmt_endpoint() -> None:
     assert m.id == "xtdata"
     assert m.plugin.kind == "datasource"
     assert m.supports_sdk(SDK_VERSION)
-    assert m.supports_sdk("0.4.0") and not m.supports_sdk("0.3.0")
+    assert m.supports_sdk("0.4.2") and not m.supports_sdk("0.4.1")  # LookupFailedError 从 0.4.2 起
     assert m.permissions.network == ()
     (ep,) = m.permissions.endpoints
     assert (ep.id, ep.default, str(ep.scope)) == (ENDPOINT_ID, "127.0.0.1:58610", "lan")
@@ -316,3 +449,11 @@ def test_import_does_not_touch_xtquant() -> None:
     assert isinstance(backend, LiveBackend)
     assert backend._xt is None  # pyright: ignore[reportPrivateUsage]
     assert "xtquant" not in sys.modules
+
+
+def test_lookup_expired_code_without_instrument_raises_lookup_failed() -> None:
+    """代码在过期列表里、合约信息却是空：数据源自相矛盾，不能记成“确定没有”。"""
+    fake = _lookup_backend()
+    del fake.instruments["600087.SH"]
+    with pytest.raises(LookupFailedError):
+        XtdataSource(fake).lookup_securities(["600087.SH"])
