@@ -65,5 +65,5 @@ testpaths = ["plugins/eltdx/tests", "plugins/xtdata/tests"]
 pythonpath = ["plugins/eltdx", "plugins/eltdx/tests", "plugins/xtdata", "plugins/xtdata/tests"]
 addopts = "--import-mode=importlib --strict-markers"
 markers = [
-    "local_data: 需要 .local-data/ 下的本地录制文件（不进仓库）；CI 用 -m \"not local_data\" 排除",
+    "local_data: 需要 .local-data/ 下的本地录制文件（不进仓库，目录可用环境变量 DUOHELM_LOCAL_DATA 指定）；CI 用 -m \"not local_data\" 排除",
 ]

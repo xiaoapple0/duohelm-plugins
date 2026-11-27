@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import date
 from pathlib import Path
 
@@ -14,9 +15,19 @@ from duohelm_sdk import Freq
 
 from duohelm_xtdata.source import XtdataSource
 
-REPLAY_FILE = (
-    Path(__file__).resolve().parents[3] / ".local-data" / "xtdata" / "xtdata-250807.json.gz"
-)
+LOCAL_DATA_ENV = "DUOHELM_LOCAL_DATA"
+REPLAY_NAME = Path("xtdata") / "xtdata-250807.json.gz"
+
+# 录制脚本写到这里：仓库内被忽略的 .local-data/，不受环境变量影响
+REPLAY_FILE = Path(__file__).resolve().parents[3] / ".local-data" / REPLAY_NAME
+
+
+def replay_file() -> Path:
+    """回放测试读的录制文件。设置了环境变量 DUOHELM_LOCAL_DATA 时从 <它>/xtdata/ 读，
+    没设置时用仓库根目录的 .local-data/（让独立的 git worktree 也能跑回放测试）。"""
+    root = os.environ.get(LOCAL_DATA_ENV)
+    return Path(root) / REPLAY_NAME if root else REPLAY_FILE
+
 
 CATL = "300750.SZ"  # 宁德时代：2018-06-11 上市（星期一）。美东时区下日期字符串显示为 2018-06-10
 CATL_RANGE = (date(2018, 6, 1), date(2018, 6, 30))

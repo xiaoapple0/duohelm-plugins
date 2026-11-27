@@ -25,21 +25,22 @@ pytestmark = pytest.mark.local_data
 @pytest.fixture(scope="module", autouse=True)
 def _require_replay_file() -> None:
     """选中了这些测试却缺少录制文件：失败，不跳过。模块级，先于 source 执行。"""
-    if not scenario.REPLAY_FILE.exists():
+    path = scenario.replay_file()
+    if not path.exists():
         pytest.fail(
-            f"缺少本地录制文件 {scenario.REPLAY_FILE}：运行 scripts/capture_eltdx.py 录制，"
-            '或用 -m "not local_data" 排除回放测试',
+            f"缺少本地录制文件 {path}（环境变量 {scenario.LOCAL_DATA_ENV} 可指定录制数据目录）："
+            '运行 scripts/capture_eltdx.py 录制，或用 -m "not local_data" 排除回放测试',
             pytrace=False,
         )
 
 
 @pytest.fixture(scope="module")
 def source() -> EltdxSource:
-    return EltdxSource(ReplayBackend(scenario.REPLAY_FILE))
+    return EltdxSource(ReplayBackend(scenario.replay_file()))
 
 
 def test_recorded_with_pinned_eltdx() -> None:
-    assert ReplayBackend(scenario.REPLAY_FILE).meta["eltdx"] == "3.3.5"
+    assert ReplayBackend(scenario.replay_file()).meta["eltdx"] == "3.3.5"
 
 
 def test_whole_scenario_replays(source: EltdxSource) -> None:
