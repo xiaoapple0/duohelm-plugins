@@ -137,3 +137,27 @@ def test_index_constituents(source: EltdxSource) -> None:
     assert df["out_date"].null_count() == 300  # 没有调出记录
     assert df["symbol"].str.contains(r"^\d{6}\.(SH|SZ)$").all()
     assert df["in_date"].min() is not None
+
+
+# ---- 成交量单位（duohelm-plugins#3） ----
+# 指数日线用的是录制交易日历时已经录下的调用（上证指数、深证成指，起点同 CALENDAR_RANGE），
+# 单位换算在插件层，录制的原始响应不变，所以不需要重新录制。
+
+
+def test_stock_average_price_within_day_range(source: EltdxSource) -> None:
+    """个股：成交额 / 股数落在当天最低价与最高价之间（留 1 分的舍入余量）。"""
+    df = source.bars([scenario.LISTED], Freq.DAY, *scenario.LISTED_RANGE)
+    avg = df["amount"] / df["volume"]
+    assert ((avg >= df["low"] - 0.01) & (avg <= df["high"] + 0.01)).all()
+
+
+@pytest.mark.parametrize("symbol", ["000001.SH", "399001.SZ"])
+def test_index_average_price_in_a_share_range(source: EltdxSource, symbol: str) -> None:
+    """指数：成交额 / 股数是成分股的平均成交价，应在 1-100 元之间。
+
+    不换算（volume 当作手的原值）时这个值约为 100 倍，会落到 100 元以上。
+    """
+    df = source.bars([symbol], Freq.DAY, *scenario.CALENDAR_RANGE)
+    assert df.height > 200
+    avg = df["amount"] / df["volume"]
+    assert ((avg >= 1) & (avg <= 100)).all(), avg.describe()

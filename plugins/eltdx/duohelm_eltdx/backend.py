@@ -33,7 +33,11 @@ class DailyBar:
     low_milli: int
     close_milli: int
     volume: float
-    """股数（eltdx 的 volume_wire_value；volume_lots 是带小数的手数，不用）。"""
+    """eltdx 的 volume_wire_value 原值（volume_lots 是带小数的手数，不用）。
+
+    单位随证券类型而不同：股票、ETF、北交所是股，指数是手。这里不换算，
+    换算在 ``source.py`` 里按 ``units.shares_per_volume_unit`` 做。
+    """
     amount: float
     """元。"""
 

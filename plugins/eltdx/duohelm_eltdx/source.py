@@ -7,6 +7,8 @@
 - 历史停牌日没有这一行；当前停牌的股票当天有一根成交量为 0 的占位 K 线，丢弃
 - 服务器的复权价是线性变换，会出现负数价格，不使用；复权因子由除权除息记录在本地
   按比例计算（``duohelm_sdk.adjust.factors_from_events``）
+- 成交量单位随证券类型而不同：股票、ETF、北交所是股，**指数是手**（乘 100 换成股）；
+  类型无法判断的证券（债券、B 股等）拒绝返回日线，见 ``units.py``
 - 没有交易日历接口：用上证指数和深证成指的日线推出交易日，取并集
 - 指数成分只有当前名单和纳入日期，没有调出记录
 - 拿不到摘牌日：``lookup_securities`` 的 ``delist_date`` 是最后一根有成交的 K 线的日期，
@@ -29,6 +31,7 @@ from duohelm_sdk.schema import ADJ_FACTORS_SCHEMA, BARS_SCHEMA, SECURITIES_SCHEM
 
 from duohelm_eltdx.backend import PAGE_SIZE, Backend, BarKind, DailyBar, LiveBackend
 from duohelm_eltdx.codes import exchange_of, to_eltdx, to_symbol
+from duohelm_eltdx.units import security_type, shares_per_volume_unit
 
 logger = logging.getLogger(__name__)
 
@@ -109,13 +112,14 @@ class EltdxSource:
         frames: list[pl.DataFrame] = []
         for symbol in dict.fromkeys(symbols):
             code = to_eltdx(symbol)
-            kind: BarKind = "stock" if code in self._listed_codes() else "delisted"
+            per_unit = shares_per_volume_unit(symbol)  # 类型未知时抛错，不返回单位不明的成交量
+            kind = self._bar_kind(symbol, code)
             picked = [
                 b
                 for b in self._since(code, kind, start)
                 if start <= b.date <= end and b.volume > 0  # 成交量为 0：停牌占位行
             ]
-            frames.append(_bars_frame(symbol, picked))
+            frames.append(_bars_frame(symbol, picked, per_unit))
         if not frames:
             return pl.DataFrame(schema=BARS_SCHEMA)
         return pl.concat(frames).sort("symbol", "date")
@@ -129,8 +133,11 @@ class EltdxSource:
             events = self._ex_events(symbol, code)
             if events.height == 0:
                 continue
-            kind: BarKind = "stock" if code in self._listed_codes() else "delisted"
-            closes = _bars_frame(symbol, [b for b in self._history(code, kind) if b.volume > 0])
+            kind = self._bar_kind(symbol, code)
+            # 这里只用收盘价，成交量不参与计算，单位按 1 处理（不要求证券类型已知）
+            closes = _bars_frame(
+                symbol, [b for b in self._history(code, kind) if b.volume > 0], per_unit=1
+            )
             factors = factors_from_events(closes, events, on_invalid="skip")
             skipped = events.height - _matched_events(closes, events)
             if skipped:
@@ -167,6 +174,11 @@ class EltdxSource:
 
     # ---- 内部 ----
 
+    def _bar_kind(self, symbol: str, code: str) -> BarKind:
+        if security_type(symbol) == "index":
+            return "index"
+        return "stock" if code in self._listed_codes() else "delisted"
+
     def _listed_codes(self) -> dict[str, str]:
         if self._listed is None:
             self._listed = {row.full_code: row.name for row in self._backend.code_table()}
@@ -190,7 +202,8 @@ class EltdxSource:
         return self._since(code, kind, date.min)
 
 
-def _bars_frame(symbol: str, bars: Sequence[DailyBar]) -> pl.DataFrame:
+def _bars_frame(symbol: str, bars: Sequence[DailyBar], per_unit: int) -> pl.DataFrame:
+    """日线 -> BARS_SCHEMA。成交量乘 per_unit 换成股（见 units.py）。"""
     rows = [
         (
             b.date,
@@ -199,7 +212,7 @@ def _bars_frame(symbol: str, bars: Sequence[DailyBar]) -> pl.DataFrame:
             b.high_milli / 1000,
             b.low_milli / 1000,
             b.close_milli / 1000,
-            b.volume,
+            b.volume * per_unit,
             b.amount,
         )
         for b in bars

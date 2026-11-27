@@ -21,6 +21,12 @@ from duohelm_eltdx.backend import (
 )
 from duohelm_eltdx.codes import InvalidCodeError, to_eltdx, to_symbol
 from duohelm_eltdx.source import EltdxSource
+from duohelm_eltdx.units import (
+    SHARES_PER_VOLUME_UNIT,
+    UnknownSecurityTypeError,
+    security_type,
+    shares_per_volume_unit,
+)
 
 PLUGIN_DIR = Path(__file__).resolve().parents[1]
 
@@ -278,3 +284,91 @@ def test_index_constituents_current_only() -> None:
     assert df["symbol"].to_list() == ["600000.SH"]
     assert df["out_date"].null_count() == 1
     assert df.schema == pl.Schema({"symbol": pl.String, "in_date": pl.Date, "out_date": pl.Date})
+
+
+# ---- 成交量单位（duohelm-plugins#3） ----
+
+
+def _series(volume: float) -> list[DailyBar]:
+    return [bar(date(2024, 6, 3), volume=volume)]
+
+
+def test_stock_volume_unchanged() -> None:
+    """个股的 volume_wire_value 已经是股数，不换算。"""
+    fake = FakeBackend()
+    fake.series[("sz000001", "stock")] = _series(1_234_500.0)
+    df = EltdxSource(fake).bars(["000001.SZ"], Freq.DAY, date(2024, 6, 1), date(2024, 6, 30))
+    assert df["volume"].to_list() == [1_234_500.0]
+
+
+@pytest.mark.parametrize(
+    ("symbol", "code"),
+    [("510300.SH", "sh510300"), ("159919.SZ", "sz159919"), ("920000.BJ", "bj920000")],
+)
+def test_etf_and_bj_volume_unchanged(symbol: str, code: str) -> None:
+    fake = FakeBackend()
+    fake.series[(code, "delisted")] = _series(5000.0)  # 不在代码表里的走退市接口，与单位无关
+    fake.codes.append(CodeRow(code, "x"))
+    fake.series[(code, "stock")] = _series(5000.0)
+    df = EltdxSource(fake).bars([symbol], Freq.DAY, date(2024, 6, 1), date(2024, 6, 30))
+    assert df["volume"].to_list() == [5000.0]
+
+
+@pytest.mark.parametrize(("symbol", "code"), [("000001.SH", "sh000001"), ("399001.SZ", "sz399001")])
+def test_index_volume_converted_from_lots_to_shares(symbol: str, code: str) -> None:
+    """指数的 volume_wire_value 是手：乘 100 换成股，并走指数接口（不是个股/退市接口）。"""
+    fake = FakeBackend()
+    fake.series[(code, "index")] = _series(3_000_000.0)
+    df = EltdxSource(fake).bars([symbol], Freq.DAY, date(2024, 6, 1), date(2024, 6, 30))
+    assert df["volume"].to_list() == [300_000_000.0]
+    assert {kind for _, kind, _ in fake.page_calls} == {"index"}
+
+
+@pytest.mark.parametrize(
+    "symbol", ["110059.SH", "127045.SZ", "900901.SH", "200011.SZ", "204001.SH"]
+)
+def test_unknown_type_is_rejected_not_defaulted(symbol: str) -> None:
+    """债券、可转债、B 股等类型未知：不默认成股也不默认成手，拒绝返回，且不取数。"""
+    fake = FakeBackend()
+    with pytest.raises(UnknownSecurityTypeError, match="类型未知"):
+        EltdxSource(fake).bars([symbol], Freq.DAY, date(2024, 6, 1), date(2024, 6, 30))
+    assert fake.page_calls == []
+
+
+def test_unknown_type_still_gets_adj_factors() -> None:
+    """复权因子只用价格，不受成交量单位影响：类型未知不应让它失败。"""
+    fake = FakeBackend()
+    d = days(date(2024, 6, 1), 2)
+    fake.series[("sh110059", "delisted")] = [bar(d[0], 100.0), bar(d[1], 99.0)]
+    fake.capital["sh110059"] = [CapitalRecord(d[1], 1, 10.0, 0.0, 0.0, 0.0)]
+    df = EltdxSource(fake).adj_factors(["110059.SH"], date(2024, 1, 1), date(2024, 12, 31))
+    assert df.height == 1
+
+
+@pytest.mark.parametrize(
+    ("symbol", "kind"),
+    [
+        ("000001.SZ", "stock"),
+        ("300750.SZ", "stock"),
+        ("600519.SH", "stock"),
+        ("688981.SH", "stock"),
+        ("510300.SH", "etf"),
+        ("588000.SH", "etf"),
+        ("159919.SZ", "etf"),
+        ("920000.BJ", "bj"),
+        ("430047.BJ", "bj"),
+        ("000001.SH", "index"),  # 上证指数；同样的 000001 在深交所是平安银行
+        ("000300.SH", "index"),
+        ("399001.SZ", "index"),
+        ("110059.SH", "unknown"),
+        ("127045.SZ", "unknown"),
+        ("900901.SH", "unknown"),
+        ("200011.SZ", "unknown"),
+    ],
+)
+def test_security_type(symbol: str, kind: str) -> None:
+    assert security_type(symbol) == kind
+    if kind == "unknown":
+        assert kind not in SHARES_PER_VOLUME_UNIT
+    else:
+        assert shares_per_volume_unit(symbol) == (100 if kind == "index" else 1)
