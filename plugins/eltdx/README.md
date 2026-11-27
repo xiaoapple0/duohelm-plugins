@@ -93,6 +93,8 @@ uv run pytest -m "not local_data"   # 不需要录制文件，CI 就这样跑
 uv run pytest -m local_data         # 只跑回放测试；缺少录制文件直接失败
 ```
 
+独立的 git worktree 里没有 `.local-data/`，可以设置环境变量 `DUOHELM_LOCAL_DATA=<目录>`，回放测试就从 `<目录>/eltdx/eltdx-3.3.5.json.gz` 读（没设置时用仓库根目录的 `.local-data/`；文件不存在照样失败）。录制脚本不看这个变量，只写仓库内的 `.local-data/`。
+
 **录制需要网络**：
 
 ```bash

@@ -31,10 +31,11 @@ pytestmark = pytest.mark.local_data
 @pytest.fixture(scope="module", autouse=True)
 def _require_replay_file() -> None:
     """选中了这些测试却缺少录制文件：失败，不跳过。"""
-    if not sc.REPLAY_FILE.exists():
+    path = sc.replay_file()
+    if not path.exists():
         pytest.fail(
-            f"缺少本地录制文件 {sc.REPLAY_FILE}：运行 scripts/capture_xtdata.py 录制，"
-            '或用 -m "not local_data" 排除回放测试',
+            f"缺少本地录制文件 {path}（环境变量 {sc.LOCAL_DATA_ENV} 可指定录制数据目录）："
+            '运行 scripts/capture_xtdata.py 录制，或用 -m "not local_data" 排除回放测试',
             pytrace=False,
         )
 
@@ -60,7 +61,7 @@ def _new_york_time() -> Iterator[None]:
 
 @pytest.fixture(scope="module")
 def source() -> XtdataSource:
-    return XtdataSource(ReplayBackend(sc.REPLAY_FILE))
+    return XtdataSource(ReplayBackend(sc.replay_file()))
 
 
 def test_whole_scenario_replays(source: XtdataSource) -> None:
@@ -83,7 +84,7 @@ def test_catl_listing_date_in_non_utc8_zone(source: XtdataSource) -> None:
     assert date(2018, 6, 10) not in df["date"].to_list()
     # 不依赖本机时区：同一个录制的原始时间戳，按美东时区解读就是 2018-06-10（xtdata 的日期字符串
     # 在美东时区的机器上就是这样错的）；插件按 Asia/Shanghai 换算，与本机时区无关。
-    first = ReplayBackend(sc.REPLAY_FILE).daily(
+    first = ReplayBackend(sc.replay_file()).daily(
         sc.CATL, (sc.CATL_RANGE[0] - timedelta(days=5)).strftime("%Y%m%d")
     )[0]
     ny = datetime.fromtimestamp(first.time_ms / 1000, tz=ZoneInfo("America/New_York"))
@@ -93,7 +94,7 @@ def test_catl_listing_date_in_non_utc8_zone(source: XtdataSource) -> None:
 
 def test_bar_timestamps_are_fixed_utc8_midnight() -> None:
     """xtdata 日线的时间戳是固定 UTC+8 的零点；夏令时年份按 Asia/Shanghai 是凌晨 1:00，日期不变。"""
-    replay = ReplayBackend(sc.REPLAY_FILE)
+    replay = ReplayBackend(sc.replay_file())
     raw = replay.daily("000001.SZ", None)
     assert raw
     utc8 = timezone(timedelta(hours=8))

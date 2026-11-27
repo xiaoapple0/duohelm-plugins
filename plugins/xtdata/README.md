@@ -66,7 +66,7 @@ xtdata 的 `volume` 单位是手。2026-11-25 按证券类型与 eltdx（成交�
 - `tests/test_live_backend.py`：用假的 xtdata 对象检查传给 xtdata 的参数；MiniQMT 地址的来源（平台里确认的地址、没确认时不退回默认地址）和 `check_connection`
 - `tests/test_replay.py`（`local_data` 标记）：回放本地录制的真实响应，运行 SDK 的契约检查，并在美东时区下断言已知日期
 
-录制文件只放在本地 `.local-data/xtdata/`（被 `.gitignore` 忽略，不进仓库）。**重新录制需要连接 MiniQMT**：
+录制文件只放在本地 `.local-data/xtdata/`（被 `.gitignore` 忽略，不进仓库）。独立的 git worktree 里没有它时，可以设置环境变量 `DUOHELM_LOCAL_DATA=<目录>`，回放测试就从 `<目录>/xtdata/xtdata-250807.json.gz` 读（文件不存在照样失败；录制脚本不看这个变量）。**重新录制需要连接 MiniQMT**：
 
 ```bash
 uv run python scripts/capture_xtdata.py

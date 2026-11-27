@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import date
 from pathlib import Path
 
@@ -13,7 +14,19 @@ from duohelm_sdk import Freq
 
 from duohelm_eltdx.source import EltdxSource
 
-REPLAY_FILE = Path(__file__).resolve().parents[3] / ".local-data" / "eltdx" / "eltdx-3.3.5.json.gz"
+LOCAL_DATA_ENV = "DUOHELM_LOCAL_DATA"
+REPLAY_NAME = Path("eltdx") / "eltdx-3.3.5.json.gz"
+
+# 录制脚本写到这里：仓库内被忽略的 .local-data/，不受环境变量影响
+REPLAY_FILE = Path(__file__).resolve().parents[3] / ".local-data" / REPLAY_NAME
+
+
+def replay_file() -> Path:
+    """回放测试读的录制文件。设置了环境变量 DUOHELM_LOCAL_DATA 时从 <它>/eltdx/ 读，
+    没设置时用仓库根目录的 .local-data/（让独立的 git worktree 也能跑回放测试）。"""
+    root = os.environ.get(LOCAL_DATA_ENV)
+    return Path(root) / REPLAY_NAME if root else REPLAY_FILE
+
 
 LISTED = "000001.SZ"  # 平安银行
 LISTED_RANGE = (date(2024, 6, 3), date(2024, 7, 31))
