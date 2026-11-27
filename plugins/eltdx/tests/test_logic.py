@@ -301,11 +301,15 @@ def test_stock_volume_unchanged() -> None:
     assert df["volume"].to_list() == [1_234_500.0]
 
 
-def test_bj_volume_unchanged() -> None:
+@pytest.mark.parametrize(
+    ("symbol", "code"),
+    [("510300.SH", "sh510300"), ("159919.SZ", "sz159919"), ("920000.BJ", "bj920000")],
+)
+def test_etf_and_bj_volume_unchanged(symbol: str, code: str) -> None:
     fake = FakeBackend()
-    fake.codes.append(CodeRow("bj920000", "x"))
-    fake.series[("bj920000", "stock")] = _series(5000.0)
-    df = EltdxSource(fake).bars(["920000.BJ"], Freq.DAY, date(2024, 6, 1), date(2024, 6, 30))
+    fake.codes.append(CodeRow(code, "x"))
+    fake.series[(code, "stock")] = _series(5000.0)
+    df = EltdxSource(fake).bars([symbol], Freq.DAY, date(2024, 6, 1), date(2024, 6, 30))
     assert df["volume"].to_list() == [5000.0]
 
 
@@ -328,8 +332,9 @@ def test_index_volume_converted_from_lots_to_shares(symbol: str, code: str) -> N
         "200011.SZ",
         "204001.SH",
         "899050.BJ",  # 北证 50 指数：没有核对过，不能当股票
-        "510300.SH",  # ETF：没有核对过的代码，暂为未知
-        "159919.SZ",
+        "520000.SH",  # 沪 52 开头：没有核对过
+        "161005.SZ",  # LOF
+        "150001.SZ",  # 分级基金
         "501018.SH",  # LOF
         "161725.SZ",  # LOF
     ],
@@ -362,8 +367,15 @@ def test_unknown_type_still_gets_adj_factors() -> None:
         ("920000.BJ", "bj"),
         ("899050.BJ", "unknown"),
         ("430047.BJ", "unknown"),  # 北交所老代码，录制数据里没有
-        ("510300.SH", "unknown"),
-        ("159919.SZ", "unknown"),
+        ("510300.SH", "etf"),
+        ("518880.SH", "etf"),
+        ("563300.SH", "etf"),
+        ("588000.SH", "etf"),
+        ("159919.SZ", "etf"),
+        ("302132.SZ", "stock"),  # 创业板 30 开头：300、301、302 都是股票
+        ("520000.SH", "unknown"),
+        ("161005.SZ", "unknown"),
+        ("150001.SZ", "unknown"),
         ("501018.SH", "unknown"),
         ("161725.SZ", "unknown"),
         ("000001.SH", "index"),  # 上证指数；同样的 000001 在深交所是平安银行
