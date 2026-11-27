@@ -57,9 +57,11 @@ SDK 的 `delist_date` 定义为**摘牌日之前的最后一个交易所交易�
 | 601268.SH *ST二重 | 2014-04-28 | 2015-05-20 |
 | 000527.SZ 美的电器 | 2013-08-14 | 2013-09-17 |
 
-因此插件声明 `Capabilities.exact_delist_date=False`（duohelm-sdk 0.4.1 起），DuoHelm 同步时把 eltdx 给出的退市日记为近似值（数据集 `delist_date_quality` 的 `exact` 为 False）。用能给出摘牌日的数据源（xtdata）修正，属于 DuoHelm 的交叉核对（xiaoapple0/duohelm#32）。
+因此插件声明 `Capabilities.exact_delist_date=False`（duohelm-sdk 0.4.1 起），DuoHelm 同步时把 eltdx 给出的退市日记为近似值（数据集 `delist_date_quality` 的 `exact` 为 False）。同一证券有精确数据源（xtdata 的摘牌日）时以精确的为准、eltdx 的值只用于 xtdata 没有的证券，这个逻辑在平台的 xiaoapple0/duohelm#89 里，平台版本含该改动才生效；在那之前，后同步的数据源会覆盖退市日（见 xiaoapple0/duohelm-plugins#4）。
 
-升级到这个版本之前同步过 eltdx 的，升级后再同步一次：平台每次都会重新查询全部退市股，把它们改为近似值。
+`lookup_securities` 算上市日、退市日时，先丢掉成交量为 0 的行（停牌占位行），所以 `delist_date` 取的是最后一根真正有成交的 K 线，与 `bars()` 的过滤一致。
+
+升级到这个版本之前同步过 eltdx 的，升级后再同步一次：平台每次都会重新查询全部退市股，把 eltdx 给出的退市日改为近似值。xiaoapple0/duohelm#89 合并之前，后同步的数据源会覆盖先同步的退市日；合并之后，已有 xtdata 精确值的证券保留精确值（`exact` 为 True），eltdx 只补 xtdata 没有的证券。
 
 不参与复权的除权记录类别：股本变化、送配股上市、非流通股上市、转配股上市、送认沽权证（股改）等。
 
