@@ -301,16 +301,25 @@ def test_stock_volume_unchanged() -> None:
     assert df["volume"].to_list() == [1_234_500.0]
 
 
-@pytest.mark.parametrize(
-    ("symbol", "code"),
-    [("510300.SH", "sh510300"), ("159919.SZ", "sz159919"), ("920000.BJ", "bj920000")],
-)
-def test_etf_and_bj_volume_unchanged(symbol: str, code: str) -> None:
+def test_bj_volume_unchanged() -> None:
     fake = FakeBackend()
-    fake.codes.append(CodeRow(code, "x"))
-    fake.series[(code, "stock")] = _series(5000.0)
+    fake.codes.append(CodeRow("bj920000", "x"))
+    fake.series[("bj920000", "stock")] = _series(5000.0)
+    df = EltdxSource(fake).bars(["920000.BJ"], Freq.DAY, date(2024, 6, 1), date(2024, 6, 30))
+    assert df["volume"].to_list() == [5000.0]
+
+
+@pytest.mark.parametrize(("symbol", "code"), [("510300.SH", "sh510300"), ("159919.SZ", "sz159919")])
+def test_etf_volume_unchanged_via_delisted_api(symbol: str, code: str) -> None:
+    """ETF 不在 latest_stock_list 代码表里，走真实路径：退市日线接口，成交量乘 1。
+
+    这个接口能不能返回在市 ETF、单位是不是股，都没有核对过（见 units.py）。
+    """
+    fake = FakeBackend()
+    fake.series[(code, "delisted")] = _series(5000.0)
     df = EltdxSource(fake).bars([symbol], Freq.DAY, date(2024, 6, 1), date(2024, 6, 30))
     assert df["volume"].to_list() == [5000.0]
+    assert {kind for _, kind, _ in fake.page_calls} == {"delisted"}
 
 
 @pytest.mark.parametrize(("symbol", "code"), [("000001.SH", "sh000001"), ("399001.SZ", "sz399001")])
@@ -391,5 +400,7 @@ def test_security_type(symbol: str, kind: str) -> None:
     assert security_type(symbol) == kind
     if kind == "unknown":
         assert kind not in SHARES_PER_VOLUME_UNIT
+        with pytest.raises(UnknownSecurityTypeError):
+            shares_per_volume_unit(symbol)
     else:
         assert shares_per_volume_unit(symbol) == (100 if kind == "index" else 1)
