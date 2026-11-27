@@ -17,6 +17,7 @@ from duohelm_sdk.schema import BARS_SCHEMA, schema_problems
 
 from duohelm_eltdx.backend import ReplayBackend
 from duohelm_eltdx.source import EltdxSource
+from duohelm_eltdx.units import security_type
 
 pytestmark = pytest.mark.local_data
 
@@ -161,3 +162,9 @@ def test_index_average_price_in_a_share_range(source: EltdxSource, symbol: str) 
     assert df.height > 200
     avg = df["amount"] / df["volume"]
     assert ((avg >= 1) & (avg <= 100)).all(), avg.describe()
+
+
+def test_every_listed_security_has_known_type(source: EltdxSource) -> None:
+    """录制的代码表里每个代码的证券类型都已知。有 unknown 就失败并列出代码（不过滤证券）。"""
+    unknown = [s for s in source.securities()["symbol"].to_list() if security_type(s) == "unknown"]
+    assert unknown == [], f"{len(unknown)} 个代码类型未知：{unknown}"

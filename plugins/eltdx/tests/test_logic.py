@@ -301,16 +301,11 @@ def test_stock_volume_unchanged() -> None:
     assert df["volume"].to_list() == [1_234_500.0]
 
 
-@pytest.mark.parametrize(
-    ("symbol", "code"),
-    [("510300.SH", "sh510300"), ("159919.SZ", "sz159919"), ("920000.BJ", "bj920000")],
-)
-def test_etf_and_bj_volume_unchanged(symbol: str, code: str) -> None:
+def test_bj_volume_unchanged() -> None:
     fake = FakeBackend()
-    fake.series[(code, "delisted")] = _series(5000.0)  # 不在代码表里的走退市接口，与单位无关
-    fake.codes.append(CodeRow(code, "x"))
-    fake.series[(code, "stock")] = _series(5000.0)
-    df = EltdxSource(fake).bars([symbol], Freq.DAY, date(2024, 6, 1), date(2024, 6, 30))
+    fake.codes.append(CodeRow("bj920000", "x"))
+    fake.series[("bj920000", "stock")] = _series(5000.0)
+    df = EltdxSource(fake).bars(["920000.BJ"], Freq.DAY, date(2024, 6, 1), date(2024, 6, 30))
     assert df["volume"].to_list() == [5000.0]
 
 
@@ -325,7 +320,19 @@ def test_index_volume_converted_from_lots_to_shares(symbol: str, code: str) -> N
 
 
 @pytest.mark.parametrize(
-    "symbol", ["110059.SH", "127045.SZ", "900901.SH", "200011.SZ", "204001.SH"]
+    "symbol",
+    [
+        "110059.SH",
+        "127045.SZ",
+        "900901.SH",
+        "200011.SZ",
+        "204001.SH",
+        "899050.BJ",  # 北证 50 指数：没有核对过，不能当股票
+        "510300.SH",  # ETF：没有核对过的代码，暂为未知
+        "159919.SZ",
+        "501018.SH",  # LOF
+        "161725.SZ",  # LOF
+    ],
 )
 def test_unknown_type_is_rejected_not_defaulted(symbol: str) -> None:
     """债券、可转债、B 股等类型未知：不默认成股也不默认成手，拒绝返回，且不取数。"""
@@ -352,11 +359,13 @@ def test_unknown_type_still_gets_adj_factors() -> None:
         ("300750.SZ", "stock"),
         ("600519.SH", "stock"),
         ("688981.SH", "stock"),
-        ("510300.SH", "etf"),
-        ("588000.SH", "etf"),
-        ("159919.SZ", "etf"),
         ("920000.BJ", "bj"),
-        ("430047.BJ", "bj"),
+        ("899050.BJ", "unknown"),
+        ("430047.BJ", "unknown"),  # 北交所老代码，录制数据里没有
+        ("510300.SH", "unknown"),
+        ("159919.SZ", "unknown"),
+        ("501018.SH", "unknown"),
+        ("161725.SZ", "unknown"),
         ("000001.SH", "index"),  # 上证指数；同样的 000001 在深交所是平安银行
         ("000300.SH", "index"),
         ("399001.SZ", "index"),
