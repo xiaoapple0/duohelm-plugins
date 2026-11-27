@@ -1,4 +1,4 @@
-"""MiniQMT（迅投 xtdata）行情源：实现 duohelm-sdk 0.4 的 DataSourcePlugin 和可选的连接检查。
+"""MiniQMT（迅投 xtdata）行情源：实现 duohelm-sdk 0.4.2 起（<0.5）的 DataSourcePlugin 和连接检查。
 
 MiniQMT 的地址是清单里的 endpoint ``miniqmt``，由用户在 DuoHelm 插件页确认；确认之前
 插件拿不到地址，:meth:`XtdataSource.check_connection` 返回提示。
@@ -28,6 +28,7 @@ from duohelm_sdk import (
     ConnectionStatus,
     EndpointNotConfiguredError,
     Freq,
+    LookupFailedError,
 )
 from duohelm_sdk.adjust import EX_EVENTS_SCHEMA, factors_from_events
 from duohelm_sdk.schema import ADJ_FACTORS_SCHEMA, BARS_SCHEMA, SECURITIES_SCHEMA
@@ -114,10 +115,22 @@ class XtdataSource:
         return self._security_rows(codes)
 
     def lookup_securities(self, symbols: Sequence[str]) -> pl.DataFrame:
-        return self._security_rows(list(dict.fromkeys(symbols)))
+        """查询给定代码。返回空（或结果里没有某个代码）只表示 MiniQMT 确认没有它的合约信息；
+        连不上、接口报错、返回结构异常、任何一个代码拿不到，一律抛 ``LookupFailedError``
+        （保留原异常为 ``__cause__``），不返回空，也不返回只含已拿到部分的结果。"""
+        try:
+            return self._security_rows(list(dict.fromkeys(symbols)), strict=True)
+        except LookupFailedError:
+            raise
+        except Exception as exc:
+            raise LookupFailedError(f"MiniQMT 查询证券失败：{exc}") from exc
 
-    def _security_rows(self, codes: Sequence[str]) -> pl.DataFrame:
+    def _security_rows(self, codes: Sequence[str], *, strict: bool = False) -> pl.DataFrame:
+        """strict：查询用。已过期的合约算不出退市日时抛错，不静默当成在市。"""
         expired: set[str] = self._expired_codes() if codes else set()
+        if strict and codes and not expired:
+            # 过期列表为空不可信：不检查的话，已退市的代码会被当成在市，退市日为空
+            raise ValueError("MiniQMT 返回的过期沪深 A 股列表为空")
         rows: list[tuple[object, ...]] = []
         missing = 0
         for symbol in codes:
@@ -128,6 +141,10 @@ class XtdataSource:
             delist = None
             if symbol in expired:
                 delist = self._last_trading_day_before(parse_yyyymmdd(info.expire_date))
+                if strict and delist is None:
+                    raise ValueError(
+                        f"{symbol} 在过期列表里，但算不出退市日（缺少摘牌日或交易日历）"
+                    )
             exchange = symbol.rsplit(".", 1)[1]
             rows.append(
                 (symbol, info.name, exchange, "stock", parse_yyyymmdd(info.open_date), delist)

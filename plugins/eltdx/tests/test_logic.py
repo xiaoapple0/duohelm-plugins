@@ -7,7 +7,8 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-from duohelm_sdk import SDK_VERSION, Freq, load_manifest
+from duohelm_sdk import SDK_VERSION, Freq, LookupFailedError, load_manifest
+from duohelm_sdk.schema import SECURITIES_SCHEMA
 
 from duohelm_eltdx import plugin
 from duohelm_eltdx.backend import (
@@ -92,8 +93,8 @@ def test_manifest_valid() -> None:
     m = load_manifest(PLUGIN_DIR)
     assert m.id == "eltdx"
     assert m.plugin.kind == "datasource"
-    assert m.supports_sdk(SDK_VERSION) and m.supports_sdk("0.4.1")
-    assert not m.supports_sdk("0.4.0")  # exact_delist_date 从 0.4.1 起才有
+    assert m.supports_sdk(SDK_VERSION) and m.supports_sdk("0.4.2")
+    assert not m.supports_sdk("0.4.1")  # LookupFailedError 从 0.4.2 起才有
     assert not m.supports_sdk("0.5.0")
     assert "static.tdx.com.cn:7615" in m.permissions.network
     assert sum(h.endswith(":7709") for h in m.permissions.network) >= 40
@@ -175,6 +176,98 @@ def test_lookup_skips_code_with_only_placeholders() -> None:
     fake = FakeBackend()
     fake.series[("sh601268", "delisted")] = [bar(date(2014, 4, 21), volume=0.0)]
     assert EltdxSource(fake).lookup_securities(["601268.SH"]).height == 0
+
+
+# ---- lookup_securities 查询失败：抛 LookupFailedError，不返回空或部分结果 ----
+
+
+class _BoomError(RuntimeError):
+    pass
+
+
+def _delisted_backend() -> FakeBackend:
+    fake = FakeBackend()
+    fake.series[("sh600087", "delisted")] = [bar(d) for d in days(date(2010, 1, 1), 5)]
+    fake.series[("sh601268", "delisted")] = [bar(d) for d in days(date(2012, 1, 1), 5)]
+    return fake
+
+
+def test_lookup_code_table_failure_raises_lookup_failed() -> None:
+    fake = _delisted_backend()
+    boom = _BoomError("连不上")
+
+    def broken() -> list[CodeRow]:
+        raise boom
+
+    fake.code_table = broken  # type: ignore[method-assign]
+    with pytest.raises(LookupFailedError) as info:
+        EltdxSource(fake).lookup_securities(["600087.SH"])
+    assert info.value.__cause__ is boom
+
+
+def test_lookup_connection_error_raises_lookup_failed() -> None:
+    fake = _delisted_backend()
+
+    def broken(full_code: str, kind: BarKind, offset: int) -> list[DailyBar]:
+        raise ConnectionError("无法连接通达信主站")
+
+    fake.daily_page = broken  # type: ignore[method-assign]
+    with pytest.raises(LookupFailedError) as info:
+        EltdxSource(fake).lookup_securities(["600087.SH"])
+    assert isinstance(info.value.__cause__, ConnectionError)
+
+
+def test_lookup_partial_failure_raises_instead_of_partial_result() -> None:
+    """第一个代码查到了、第二个代码出错：整体抛异常，不返回只含第一个代码的结果。"""
+    fake = _delisted_backend()
+    original = fake.daily_page
+
+    def flaky(full_code: str, kind: BarKind, offset: int) -> list[DailyBar]:
+        if full_code == "sh601268":
+            raise TimeoutError("超时")
+        return original(full_code, kind, offset)
+
+    fake.daily_page = flaky  # type: ignore[method-assign]
+    with pytest.raises(LookupFailedError) as info:
+        EltdxSource(fake).lookup_securities(["600087.SH", "601268.SH"])
+    assert isinstance(info.value.__cause__, TimeoutError)
+
+
+def test_lookup_malformed_response_raises_lookup_failed() -> None:
+    """返回结构异常（这里是 K 线没有 volume 属性）也是查询失败。"""
+    fake = _delisted_backend()
+    fake.daily_page = lambda *_a: [object()]  # type: ignore[method-assign, list-item, return-value]
+    with pytest.raises(LookupFailedError) as info:
+        EltdxSource(fake).lookup_securities(["600087.SH"])
+    assert isinstance(info.value.__cause__, AttributeError)
+
+
+def test_lookup_too_many_pages_raises_lookup_failed() -> None:
+    fake = FakeBackend()
+    fake.daily_page = lambda *_a: [bar(date(2020, 1, 1))] * PAGE_SIZE  # type: ignore[method-assign]
+    with pytest.raises(LookupFailedError) as info:
+        EltdxSource(fake).lookup_securities(["600087.SH"])
+    assert isinstance(info.value.__cause__, RuntimeError)
+
+
+def test_lookup_empty_code_table_raises_lookup_failed() -> None:
+    """代码表为空不可信：否则在市股票会被当成退市股。"""
+    fake = _delisted_backend()
+    fake.codes = []
+    with pytest.raises(LookupFailedError):
+        EltdxSource(fake).lookup_securities(["600087.SH"])
+
+
+def test_lookup_confirmed_absent_returns_empty_without_raising() -> None:
+    """接口正常返回空：确认数据源没有这个代码，返回空表，不抛异常。"""
+    df = EltdxSource(FakeBackend()).lookup_securities(["609999.SH"])
+    assert df.height == 0
+    assert dict(df.schema) == SECURITIES_SCHEMA
+
+
+def test_lookup_invalid_symbol_is_not_a_lookup_failure() -> None:
+    with pytest.raises(InvalidCodeError):
+        EltdxSource(FakeBackend()).lookup_securities(["abc"])
 
 
 # ---- 日线 ----

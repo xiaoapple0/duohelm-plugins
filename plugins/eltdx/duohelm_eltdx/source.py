@@ -1,4 +1,4 @@
-"""eltdx 行情源：实现 duohelm-sdk 0.4.1 起（<0.5）的 DataSourcePlugin。
+"""eltdx 行情源：实现 duohelm-sdk 0.4.2 起（<0.5）的 DataSourcePlugin。
 
 数据特性（2026-11-25 用 eltdx 3.3.5 实测，见 DuoHelm 的 docs/subsystems/data.md）：
 
@@ -27,7 +27,7 @@ from collections.abc import Sequence
 from datetime import date
 
 import polars as pl
-from duohelm_sdk import Capabilities, Freq
+from duohelm_sdk import Capabilities, Freq, LookupFailedError
 from duohelm_sdk.adjust import EX_EVENTS_SCHEMA, factors_from_events
 from duohelm_sdk.schema import ADJ_FACTORS_SCHEMA, BARS_SCHEMA, SECURITIES_SCHEMA
 
@@ -75,10 +75,25 @@ class EltdxSource:
         return pl.DataFrame(rows, schema=SECURITIES_SCHEMA, orient="row")
 
     def lookup_securities(self, symbols: Sequence[str]) -> pl.DataFrame:
+        """查询给定代码。返回空（或结果里没有某个代码）只表示确认数据源没有它；
+        连不上、接口报错、返回结构异常、任何一批拿不到，一律抛 ``LookupFailedError``
+        （保留原异常为 ``__cause__``），不返回空，也不返回只含已拿到部分的结果。"""
+        unique = list(dict.fromkeys(symbols))
+        codes = [(symbol, to_eltdx(symbol)) for symbol in unique]  # 代码格式错误是调用方的问题
+        try:
+            return self._lookup(codes)
+        except LookupFailedError:
+            raise
+        except Exception as exc:
+            raise LookupFailedError(f"eltdx 查询证券失败：{exc}") from exc
+
+    def _lookup(self, codes: Sequence[tuple[str, str]]) -> pl.DataFrame:
         listed = self._listed_codes()
+        if not listed:
+            # 代码表为空不可信：不检查的话，在市股票会被当成退市股，退市日也会被填上
+            raise LookupFailedError("eltdx 返回的代码表为空")
         rows: list[tuple[object, ...]] = []
-        for symbol in dict.fromkeys(symbols):
-            code = to_eltdx(symbol)
+        for symbol, code in codes:
             # 上市日、退市日只看有成交的 K 线，与 bars() 一致：成交量为 0 的是停牌占位行
             bars = [b for b in self._history(code, "delisted") if b.volume > 0]
             if not bars:

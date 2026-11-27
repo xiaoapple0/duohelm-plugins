@@ -1,6 +1,6 @@
 # eltdx 行情源插件
 
-通过 [eltdx](https://github.com/electkismet/eltdx) 3.3.5 读取通达信行情，实现 duohelm-sdk 0.4.1 起（<0.5）的 `DataSourcePlugin`。
+通过 [eltdx](https://github.com/electkismet/eltdx) 3.3.5 读取通达信行情，实现 duohelm-sdk 0.4.2 起（<0.5）的 `DataSourcePlugin`。
 
 ## 许可：仅限个人非商业研究
 
@@ -24,7 +24,7 @@ uv pip install "eltdx==3.3.5"
 |---|---|---|
 | `capabilities()` | — | 只有日线；`lists_delisted=False` |
 | `securities()` | 代码表 | 只有在市的 A 股；上市日由平台根据第一根 K 线补齐 |
-| `lookup_securities()` | 退市日线接口 | 用第一根和最后一根**有成交的** K 线的日期作为上市日、退市日；退市股的名称取不到。退市日是近似值，见下 |
+| `lookup_securities()` | 退市日线接口 | 用第一根和最后一根**有成交的** K 线的日期作为上市日、退市日；退市股的名称取不到。退市日是近似值，见下。查询失败抛 `LookupFailedError`，见下 |
 | `bars()` | 日线；退市股用退市日线接口，指数用指数日线接口 | 未复权；成交量换成**股**（单位见下）；丢弃成交量为 0 的行（停牌股当天的占位 K 线） |
 | `adj_factors()` | 除权除息记录（类别 1） | 每 10 股的数据换算成每股，交给 `duohelm_sdk.adjust.factors_from_events` 计算。**不使用**服务器的复权价（线性变换，会出现负数） |
 | `trading_calendar("CN")` | 上证指数、深证成指的日线 | 两市交易日的并集；北交所沿用深市 |
@@ -64,6 +64,16 @@ SDK 的 `delist_date` 定义为**摘牌日之前的最后一个交易所交易�
 升级到这个版本之前同步过 eltdx 的，升级后再同步一次：平台每次都会重新查询全部退市股，把 eltdx 给出的退市日改为近似值。xiaoapple0/duohelm#89 合并之前，后同步的数据源会覆盖先同步的退市日；合并之后，已有 xtdata 精确值的证券保留精确值（`exact` 为 True），eltdx 只补 xtdata 没有的证券。
 
 不参与复权的除权记录类别：股本变化、送配股上市、非流通股上市、转配股上市、送认沽权证（股改）等。
+
+### 查询失败抛 LookupFailedError
+
+`lookup_securities()` 返回空（或结果里没有某个代码）只表示**接口正常返回、确认通达信没有这个代码的 K 线**。下面这些情况一律抛 `duohelm_sdk.LookupFailedError`（duohelm-sdk 0.4.2 起，原异常保留为 `__cause__`），不返回空，也不返回只含已拿到部分的结果：
+
+- 连不上主站、接口报错或超时
+- 任何一个代码查询出错（整批都不返回）
+- 返回结构异常：K 线数据结构不对、翻页超过上限、代码表为空。代码表为空时不检查的话，在市股票会被当成退市股返回
+
+平台收到它，把这批代码记为“未知”，不记“没找到”，这次同步失败；下次同步照常重查，退市股不会因为一次连接失败被漏掉（见 DuoHelm 的 `docs/subsystems/plugins.md`、`data.md` 的“退市股扫描”）。代码格式错误（不是 6 位数字加 `.SH`/`.SZ`/`.BJ`）是调用方的问题，仍抛 `InvalidCodeError`，不算查询失败。
 
 ## 网络
 

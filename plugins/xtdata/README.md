@@ -1,6 +1,6 @@
 # MiniQMT 行情源插件（迅投 xtdata）
 
-通过已登录的 MiniQMT 读取 A 股行情，实现 duohelm-sdk 0.4 的 `DataSourcePlugin` 和可选的 `check_connection`。DuoHelm 的主数据源（eltdx 插件作为备用和交叉核对）。
+通过已登录的 MiniQMT 读取 A 股行情，实现 duohelm-sdk 0.4.2 起（<0.5）的 `DataSourcePlugin` 和可选的 `check_connection`。DuoHelm 的主数据源（eltdx 插件作为备用和交叉核对）。
 
 ## 行情数据只供本人使用
 
@@ -30,11 +30,21 @@ xtquant 是原生扩展，DuoHelm 的 Python 层网络拦截管不到它的连�
 |---|---|---|
 | `capabilities()` | — | 只有日线；`lists_delisted=True` |
 | `securities()` | 板块“沪深A股”“京市A股”，合约信息 | `include_delisted=True` 时加上过期合约板块“过期沪深A股”。早年退市的不全（如 PT金田A），DuoHelm 再用 eltdx 补全 |
-| `lookup_securities()` | 合约信息 | 只返回 MiniQMT 有合约信息的代码 |
+| `lookup_securities()` | 合约信息 | 只返回 MiniQMT 有合约信息的代码；查询失败抛 `LookupFailedError`，见下 |
 | `bars()` | `get_market_data_ex`（`fill_data=False`，不复权） | 停牌日没有这一行；丢弃成交量为 0 的行；成交量由手换成股；价格按 0.001 取整 |
 | `adj_factors()` | `get_divid_factors` | 每股派息、送股 + 转增、配股、配股价交给 `duohelm_sdk.adjust.factors_from_events`；与 xtdata 的除权系数 `dr` 交叉核对，相差超过 0.1% 的记警告 |
 | `trading_calendar("CN")` | `get_trading_dates("SH")`、`("SZ")` | 两市交易日的并集 |
 | `index_constituents()` | 指数板块 | **只有当前成分**（普通版取不到历史成分），`in_date`、`out_date` 都为 null |
+
+### 查询失败抛 LookupFailedError
+
+`lookup_securities()` 返回空（或结果里没有某个代码）只表示 **MiniQMT 确认没有这个代码的合约信息**。下面这些情况一律抛 `duohelm_sdk.LookupFailedError`（duohelm-sdk 0.4.2 起，原异常保留为 `__cause__`），不返回空，也不返回只含已拿到部分的结果：
+
+- 连不上 MiniQMT、插件页还没确认地址（`EndpointNotConfiguredError`）、缺少依赖、接口报错或超时
+- 任何一个代码查询出错（整批都不返回）
+- 返回结构异常：过期沪深 A 股列表为空，或已过期的合约算不出退市日（摘牌日缺失、交易日历为空）。不检查的话，退市股会被当成在市股票返回
+
+平台收到它，把这批代码记为“未知”，不记“没找到”，这次同步失败；下次同步照常重查，退市股不会因为一次连接失败被漏掉（见 DuoHelm 的 `docs/subsystems/plugins.md`、`data.md` 的“退市股扫描”）。只有 `lookup_securities()` 这样处理；`securities()` 等其他方法出错仍抛原异常。
 
 ### 日期：一律由时间戳按 Asia/Shanghai 换算
 
