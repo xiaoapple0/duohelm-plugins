@@ -55,7 +55,7 @@ def test_daily_requests_unadjusted_unfilled_bars(monkeypatch: pytest.MonkeyPatch
     fake = _FakeXt()
     backend = LiveBackend(MiniQMTConfig(download_timeout_s=5))
     monkeypatch.setattr(LiveBackend, "_get", lambda self: fake)  # pyright: ignore[reportUnknownLambdaType]
-    bars = backend.daily("300750.SZ", "20180601")
+    bars = backend.read_daily("300750.SZ", "20180601")
     assert len(bars) == 1 and bars[0].time_ms == 1528646400000
     assert bars[0].pre_close == 0.9  # 核对复权因子要用 preClose
     (_, args, kwargs) = next(c for c in fake.calls if c[0] == "get_market_data_ex")
