@@ -1,7 +1,7 @@
 [plugin]
 id = "xtdata"
 name = "MiniQMT 行情源（迅投 xtdata）"
-version = "0.2.0"
+version = "0.2.1"
 kind = "datasource"
 sdk = ">=0.4.2,<0.5"
 author = "DuoHelm"

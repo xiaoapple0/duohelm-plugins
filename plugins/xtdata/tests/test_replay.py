@@ -23,6 +23,7 @@ from duohelm_sdk.schema import BARS_SCHEMA, schema_problems
 
 from duohelm_xtdata.backend import ReplayBackend
 from duohelm_xtdata.dates import SHANGHAI, security_type, shanghai_date
+from duohelm_xtdata.source import _START_BUFFER as START_BUFFER  # pyright: ignore[reportPrivateUsage]
 from duohelm_xtdata.source import XtdataSource
 
 pytestmark = pytest.mark.local_data
@@ -60,8 +61,13 @@ def _new_york_time() -> Iterator[None]:
 
 
 @pytest.fixture(scope="module")
-def source() -> XtdataSource:
-    return XtdataSource(ReplayBackend(sc.replay_file()))
+def backend() -> ReplayBackend:
+    return ReplayBackend(sc.replay_file())
+
+
+@pytest.fixture(scope="module")
+def source(backend: ReplayBackend) -> XtdataSource:
+    return XtdataSource(backend)
 
 
 def test_whole_scenario_replays(source: XtdataSource) -> None:
@@ -171,9 +177,32 @@ def test_listed_bars(source: XtdataSource) -> None:
     assert df["date"].to_list() == [d for d in cal if lo <= d <= hi]
 
 
-def test_delisted_bars(source: XtdataSource) -> None:
+def test_delisted_bars(backend: ReplayBackend, source: XtdataSource) -> None:
+    """xtdata 对退市股只给成交量、价格全为 0：原始数据里有到退市前最后一天的行，插件全部丢弃。"""
+    raw = backend.daily(sc.DELISTED, (sc.DELISTED_RANGE[0] - START_BUFFER).strftime("%Y%m%d"))
+    assert max(shanghai_date(b.time_ms) for b in raw) == date(2014, 6, 4)
+    assert all(b.open == b.high == b.low == b.close == 0 for b in raw)
+    assert any(b.volume > 0 for b in raw)
     df = source.bars([sc.DELISTED], Freq.DAY, *sc.DELISTED_RANGE)
-    assert df["date"].max() == date(2014, 6, 4)
+    assert df.height == 0
+
+
+def test_zero_price_delisted_bars_dropped(backend: ReplayBackend, source: XtdataSource) -> None:
+    raw = {s: backend.daily(s, None) for s in sc.ZERO_PRICE}
+    for symbol, bars in raw.items():
+        assert bars, symbol
+        assert all(b.open == b.high == b.low == b.close == 0 for b in bars), symbol
+        assert any(b.volume > 0 for b in bars), symbol
+    df = source.bars(sc.ZERO_PRICE, Freq.DAY, *sc.ZERO_PRICE_RANGE)
+    assert schema_problems(df, BARS_SCHEMA) == []
+    assert df.height == 0
+
+
+def test_zero_price_adj_factors_pass_check(source: XtdataSource) -> None:
+    """旧代码：000016.SZ 1996-07-17 等配股事件的因子为 0，同步被复权因子检查拦下。"""
+    df = source.adj_factors(sc.ZERO_PRICE, *sc.ZERO_PRICE_RANGE)
+    assert check_adj_factors(df).passed
+    assert df.height == 0  # 没有有效的除权前收盘价，不产生因子
 
 
 def test_adj_factors(source: XtdataSource) -> None:
