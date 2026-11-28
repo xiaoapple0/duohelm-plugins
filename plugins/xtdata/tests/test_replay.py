@@ -12,6 +12,7 @@ import sys
 import time
 from collections.abc import Iterator
 from datetime import date, datetime, timedelta, timezone
+from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo
 
 import polars as pl
@@ -214,10 +215,92 @@ def test_adj_factors(source: XtdataSource) -> None:
     by_date = dict(zip(pingan["date"].to_list(), pingan["factor"].to_list(), strict=True))
     before = max(d for d in by_date if d < date(2024, 6, 14))
     ratio = by_date[date(2024, 6, 14)] / by_date[before]
-    assert ratio == pytest.approx(prev_close / (prev_close - 0.719), rel=1e-9)  # 每股派 0.719 元
+    # 每股派 0.719 元；参考价按交易所的做法四舍五入到 0.01 元（#19）
+    ref = float(Decimal(repr(prev_close - 0.719)).quantize(Decimal("0.01"), ROUND_HALF_UP))
+    assert ref != pytest.approx(prev_close - 0.719, rel=1e-6)  # 取整确实改变了参考价
+    assert ratio == pytest.approx(prev_close / ref, rel=1e-9)
 
 
 def test_index_constituents(source: XtdataSource) -> None:
     df = source.index_constituents(sc.INDEX, *sc.ADJ_RANGE)
     assert df.height == 300
     assert df["in_date"].null_count() == 300
+
+
+# ---- 除权比例核对（#19）：真实数据 ----
+
+
+def _ratios(source: XtdataSource, symbol: str) -> dict[date, float]:
+    df = source.adj_factors([symbol], *sc.ADJ_RANGE)
+    factors = df["factor"].to_list()
+    days = df["date"].to_list()
+    return {
+        d: f / (factors[i - 1] if i else 1.0)
+        for i, (d, f) in enumerate(zip(days, factors, strict=True))
+    }
+
+
+def _bar(
+    backend: ReplayBackend, symbol: str, day: date, before: bool = False
+) -> tuple[float, float]:
+    """day 那一根（before 时为它之前的一根）K 线的 (close, preClose)。"""
+    rows = [b for b in backend.daily(symbol, None) if b.volume > 0 and b.close > 0]
+    i = next(i for i, b in enumerate(rows) if shanghai_date(b.time_ms) >= day)
+    b = rows[i - 1] if before else rows[i]
+    assert b.pre_close is not None, "录制文件里没有 preClose，需要重新录制"
+    return b.close, b.pre_close
+
+
+@pytest.mark.parametrize(
+    ("symbol", "day"),
+    [
+        ("603007.SH", date(2024, 12, 26)),
+        ("300093.SZ", date(2025, 11, 20)),
+        ("000615.SZ", date(2025, 12, 29)),
+    ],
+)
+def test_restructuring_adopts_preclose_ratio(
+    backend: ReplayBackend, source: XtdataSource, symbol: str, day: date
+) -> None:
+    prev_close, _ = _bar(backend, symbol, day, before=True)
+    _, pre_close = _bar(backend, symbol, day)
+    assert _ratios(source, symbol)[day] == pytest.approx(prev_close / pre_close, rel=1e-12)
+
+
+def test_restructuring_with_unadjusted_preclose_and_dr_one(source: XtdataSource) -> None:
+    """603363.SH 2024-12-26：每股转增 2 股，事件公式给 3.0；preClose 与 dr 都说价格没有调整。"""
+    assert _ratios(source, "603363.SH")[date(2024, 12, 26)] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("symbol", ["603559.SH", "600375.SH"])
+def test_empty_event_kept_and_warned(
+    source: XtdataSource, symbol: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("WARNING"):
+        ratios = _ratios(source, symbol)
+    assert ratios.get(date(2024, 12, 26), 1.0) == pytest.approx(1.0)
+    assert any(
+        r.getMessage().startswith(f"除权核对[empty_event] {symbol} 2024-12-26")
+        for r in caplog.records
+    )
+
+
+def test_unadjusted_preclose_keeps_formula(backend: ReplayBackend, source: XtdataSource) -> None:
+    """002310.SZ 2024-12-30：间隔 2，preClose 等于上一收盘（没有按除权调整），dr 与事件公式一致。"""
+    day = date(2024, 12, 30)
+    prev_close, _ = _bar(backend, "002310.SZ", day, before=True)
+    _, pre_close = _bar(backend, "002310.SZ", day)
+    assert pre_close == pytest.approx(prev_close)
+    [d] = [x for x in backend.divid("002310.SZ") if shanghai_date(x.time_ms) == day]
+    assert _ratios(source, "002310.SZ")[day] == pytest.approx(d.dr, rel=2e-3)
+    assert _ratios(source, "002310.SZ")[day] > 2.0
+
+
+def test_long_suspension_keeps_formula(backend: ReplayBackend, source: XtdataSource) -> None:
+    """000678.SZ 2006-07-13：停牌 28 个交易日后除权，A 不干净，保留事件公式。"""
+    day = date(2006, 7, 13)
+    prev_close, _ = _bar(backend, "000678.SZ", day, before=True)
+    [d] = [x for x in backend.divid("000678.SZ") if shanghai_date(x.time_ms) == day]
+    ref = Decimal(repr(prev_close - d.interest)) / Decimal(repr(1 + d.stock_bonus + d.stock_gift))
+    expected = prev_close / float(ref.quantize(Decimal("0.01"), ROUND_HALF_UP))
+    assert _ratios(source, "000678.SZ")[day] == pytest.approx(expected, rel=1e-9)

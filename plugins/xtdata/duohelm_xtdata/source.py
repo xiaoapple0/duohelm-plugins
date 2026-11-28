@@ -12,8 +12,9 @@ MiniQMT 的地址是清单里的 endpoint ``miniqmt``，由用户在 DuoHelm 插
   全部如此，复权方式换成 front/back 也拿不到可信的价格）。价格不是有限正数的行是“不知道”，
   不是 0，丢弃并记警告；这类证券的行情要用别的数据源（eltdx）补
 - 成交量单位为手，乘以每手股数换成股
-- 除权数据按每股计；用 duohelm_sdk.adjust.factors_from_events 计算因子，并与 xtdata 的
-  除权系数 dr 交叉核对
+- 除权数据按每股计。除权比例默认用事件公式（参考价取整到 0.01 元），并与 preClose 法、
+  xtdata 的除权系数 dr 交叉核对；破产重整的转增等交易所调整了参考价公式的事件，采用
+  preClose 法（见 exrights.py、duohelm-plugins#19）
 - 沪深两市的交易日相同；普通版没有历史指数成分，只能返回当前成分
 """
 
@@ -24,6 +25,7 @@ import math
 from bisect import bisect_left
 from collections.abc import Sequence
 from datetime import date, timedelta
+from decimal import Decimal
 
 import polars as pl
 from duohelm_sdk import (
@@ -34,7 +36,6 @@ from duohelm_sdk import (
     Freq,
     LookupFailedError,
 )
-from duohelm_sdk.adjust import EX_EVENTS_SCHEMA, factors_from_events
 from duohelm_sdk.schema import ADJ_FACTORS_SCHEMA, BARS_SCHEMA, SECURITIES_SCHEMA
 
 from duohelm_xtdata.backend import (
@@ -51,6 +52,7 @@ from duohelm_xtdata.dates import (
     security_type,
     shanghai_date,
 )
+from duohelm_xtdata.exrights import Bar, Decision, Event, decide, log_decisions
 
 logger = logging.getLogger(__name__)
 
@@ -67,8 +69,6 @@ INDEX_CONSTITUENTS_SCHEMA: dict[str, pl.DataType] = {
     "in_date": pl.Date(),
     "out_date": pl.Date(),
 }
-DR_TOLERANCE = 1e-3
-"""本地算出的除权比例与 xtdata 的 dr 相差超过这个相对值时记警告。"""
 _START_BUFFER = timedelta(days=5)
 """传给 xtdata 的起始日期多留几天：日期字符串和时间戳之间可能有时区偏差，最后按换算后的日期过滤。"""
 
@@ -77,6 +77,7 @@ class XtdataSource:
     def __init__(self, backend: Backend | None = None) -> None:
         self._backend: Backend = backend if backend is not None else LiveBackend()
         self._calendar: list[date] | None = None
+        self._calendar_pos: dict[date, int] | None = None
         self._expired: set[str] | None = None
 
     # ---- 连接检查（SupportsConnectionCheck） ----
@@ -188,6 +189,12 @@ class XtdataSource:
             self._calendar = sorted(days)
         return self._calendar
 
+    def _calendar_index(self) -> dict[date, int]:
+        """交易日 -> 序号，用来算两个交易日相隔几个交易日。"""
+        if self._calendar_pos is None:
+            self._calendar_pos = {d: i for i, d in enumerate(self._trading_days())}
+        return self._calendar_pos
+
     def bars(self, symbols: Sequence[str], freq: Freq, start: date, end: date) -> pl.DataFrame:
         if freq != Freq.DAY:
             raise ValueError(f"xtdata 插件只支持日线，收到 {freq}")
@@ -208,26 +215,24 @@ class XtdataSource:
             divids = self._backend.divid(symbol)
             if not divids:
                 continue
-            events = pl.DataFrame(
-                [
-                    (
-                        shanghai_date(d.time_ms),
-                        symbol,
-                        d.interest,
-                        d.stock_bonus + d.stock_gift,
-                        d.allot_num,
-                        d.allot_price,
-                    )
-                    for d in divids
-                ],
-                schema=EX_EVENTS_SCHEMA,
-                orient="row",
-            )
+            events = [
+                Event(
+                    day=shanghai_date(d.time_ms),
+                    cash=d.interest,
+                    bonus=d.stock_bonus + d.stock_gift,
+                    rights=d.allot_num,
+                    rights_price=d.allot_price,
+                    dr=d.dr,
+                )
+                for d in divids
+            ]
             raw = self._backend.daily(symbol, None)
-            # 价格无效的行不单独警告（bars() 已按请求的区间警告过）；它们导致的事件丢弃在下面警告
-            closes = _bars_frame(symbol, raw, date.min, date.max, warn=False)
-            factors = factors_from_events(closes, events, on_invalid="skip")
-            dropped = _dropped_events(raw, events, factors)
+            # 价格无效的行在这里丢弃，不单独警告（bars() 已按请求的区间警告过）；
+            # 它们导致的事件丢弃在下面警告
+            decisions = decide(_valid_bars(raw), events, self._calendar_index(), tick=_tick(symbol))
+            log_decisions(symbol, decisions)
+            factors = _factors_frame(symbol, decisions)
+            dropped = _dropped_events(raw, {e.day for e in events}, factors)
             if dropped:
                 logger.warning(
                     "%s：%d 个除权日没有产生复权因子（除权前没有价格有效的收盘价或参考价不为正），"
@@ -235,7 +240,6 @@ class XtdataSource:
                     symbol,
                     dropped,
                 )
-            _check_against_dr(symbol, factors, {shanghai_date(d.time_ms): d.dr for d in divids})
             frames.append(factors.filter(pl.col("date").is_between(start, end)))
         if not frames:
             return pl.DataFrame(schema=ADJ_FACTORS_SCHEMA)
@@ -253,15 +257,43 @@ class XtdataSource:
         return pl.DataFrame(rows, schema=INDEX_CONSTITUENTS_SCHEMA, orient="row")
 
 
-def _dropped_events(raw: Sequence[RawBar], events: pl.DataFrame, factors: pl.DataFrame) -> int:
+def _dropped_events(raw: Sequence[RawBar], days: set[date], factors: pl.DataFrame) -> int:
     """上市以后（第一行原始日线之后）没有产生因子的除权日数。上市前的除权本来就没有因子，不算。
 
     以原始日线为准，不以价格有效的行为准：价格全为 0 的已退市证券，事件在上市以后，算作丢弃。
     """
     produced = set(factors.get_column("date").to_list())
     listed = min((shanghai_date(b.time_ms) for b in raw), default=None)
-    days = set(events.get_column("date").to_list())
     return sum(1 for d in days if (listed is None or d > listed) and d not in produced)
+
+
+def _valid_bars(raw: Sequence[RawBar]) -> list[Bar]:
+    """价格有效、成交量为正的日线（与 _bars_frame 保留的行相同），按日期升序。"""
+    bars = [
+        Bar(day=shanghai_date(b.time_ms), close=round(b.close, 3), pre_close=b.pre_close)
+        for b in raw
+        if _valid(b)
+    ]
+    return sorted(bars, key=lambda b: b.day)
+
+
+def _tick(symbol: str) -> Decimal:
+    """除权参考价的最小变动单位：股票（含北交所）0.01 元，ETF 0.001 元。
+
+    ETF 只在直接按代码请求时出现（``securities()`` 只取沪深A股、京市A股）。LOF、REITs 等
+    其他基金也是 0.001 元，但 ``security_type`` 认不出来，日线换算成交量时就会失败，到不了这里。
+    以后支持这些品种时要一并改这里。"""
+    return Decimal("0.001") if security_type(symbol) == "etf" else Decimal("0.01")
+
+
+def _factors_frame(symbol: str, decisions: Sequence[Decision]) -> pl.DataFrame:
+    """除权比例按日期累乘成因子（ADJ_FACTORS_SCHEMA）。"""
+    rows: list[tuple[object, ...]] = []
+    factor = 1.0
+    for d in decisions:
+        factor *= d.ratio
+        rows.append((d.day, symbol, factor))
+    return pl.DataFrame(rows, schema=ADJ_FACTORS_SCHEMA, orient="row")
 
 
 def _bars_frame(
@@ -280,7 +312,7 @@ def _bars_frame(
         day = shanghai_date(b.time_ms)
         if not start <= day <= end or b.volume <= 0:
             continue
-        if not all(_positive(x) for x in (b.open, b.high, b.low, b.close)):
+        if not _valid(b):
             bad_price += 1
             continue
         rows.append(
@@ -308,19 +340,6 @@ def _positive(value: float) -> bool:
     return math.isfinite(value) and value > 0
 
 
-def _check_against_dr(symbol: str, factors: pl.DataFrame, dr: dict[date, float]) -> None:
-    """本地算出的每次除权比例与 xtdata 的 dr 交叉核对，相差较大的记警告（质量报告用）。"""
-    ratios = factors.with_columns(
-        (pl.col("factor") / pl.col("factor").shift(1).fill_null(1.0)).alias("ratio")
-    )
-    for day, ratio in zip(ratios["date"].to_list(), ratios["ratio"].to_list(), strict=True):
-        expected = dr.get(day)
-        if expected and expected > 0 and abs(ratio - expected) / expected > DR_TOLERANCE:
-            logger.warning(
-                "%s %s：本地除权比例 %.6f 与 xtdata 的 dr %.6f 相差 %.3f%%",
-                symbol,
-                day,
-                ratio,
-                expected,
-                abs(ratio - expected) / expected * 100,
-            )
+def _valid(bar: RawBar) -> bool:
+    """成交量为正、开高低收都是有限正数。"""
+    return bar.volume > 0 and all(_positive(x) for x in (bar.open, bar.high, bar.low, bar.close))

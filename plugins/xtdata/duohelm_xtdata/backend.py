@@ -26,7 +26,7 @@ from duohelm_sdk.context import in_platform
 
 from duohelm_xtdata.config import MiniQMTConfig, load_config
 
-BAR_FIELDS = ["time", "open", "high", "low", "close", "volume", "amount"]
+BAR_FIELDS = ["time", "open", "high", "low", "close", "volume", "amount", "preClose"]
 ENDPOINT_ID = "miniqmt"
 """清单 ``[[permissions.endpoints]]`` 里 MiniQMT 的 id。"""
 
@@ -67,6 +67,9 @@ class RawBar:
     """xtdata 的原始成交量，单位为手（见 dates.SHARES_PER_VOLUME_UNIT）。"""
     amount: float
     """元。"""
+    pre_close: float | None = None
+    """preClose：交易所给的前收盘价（已按除权调整）。只用于核对复权因子，不进 BARS_SCHEMA。
+    2026-11-28 之前的录制文件没有这个字段，回放时为 None。"""
 
 
 @dataclass(frozen=True)
@@ -242,6 +245,7 @@ class LiveBackend:
                 close=float(row["close"]),
                 volume=float(row["volume"]),
                 amount=float(row["amount"]),
+                pre_close=float(row["preClose"]),
             )
             for _, row in frame.iterrows()
         ]

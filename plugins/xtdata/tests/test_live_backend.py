@@ -47,7 +47,7 @@ class _FakeXt:
     def get_market_data_ex(self, *args: Any, **kwargs: Any) -> dict[str, _Frame]:
         self.calls.append(("get_market_data_ex", args, kwargs))
         row = {"time": 1528646400000.0, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0}
-        return {args[1][0]: _Frame([{**row, "volume": 1.0, "amount": 100.0}])}
+        return {args[1][0]: _Frame([{**row, "volume": 1.0, "amount": 100.0, "preClose": 0.9}])}
 
 
 def test_daily_requests_unadjusted_unfilled_bars(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -57,8 +57,10 @@ def test_daily_requests_unadjusted_unfilled_bars(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(LiveBackend, "_get", lambda self: fake)  # pyright: ignore[reportUnknownLambdaType]
     bars = backend.daily("300750.SZ", "20180601")
     assert len(bars) == 1 and bars[0].time_ms == 1528646400000
+    assert bars[0].pre_close == 0.9  # 核对复权因子要用 preClose
     (_, args, kwargs) = next(c for c in fake.calls if c[0] == "get_market_data_ex")
     assert args[1] == ["300750.SZ"]
+    assert "preClose" in args[0]
     assert kwargs["period"] == "1d"
     assert kwargs["dividend_type"] == "none"
     assert kwargs["fill_data"] is False

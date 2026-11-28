@@ -44,6 +44,17 @@ ZERO_PRICE = ["000004.SZ", "000005.SZ", "000016.SZ"]
 """已退市、xtdata 只给成交量、价格全为 0 的证券（2026-11-28 实测）。000016.SZ 1996-07-17、
 000004.SZ 1993-05-24、000005.SZ 1994-09-23 有配股：价格为 0 时旧代码算出的因子为 0。"""
 ZERO_PRICE_RANGE = (date(1990, 12, 19), date(2026, 12, 31))
+EX_CHECK = [
+    "603363.SH",  # 2024-12-26 重整转增，间隔 1，preClose = 上一收盘，dr = 1：采用 A（= 1）
+    "603007.SH",  # 2024-12-26 重整转增，间隔 2，dr 也错：采用 A
+    "300093.SZ",  # 2025-11-20 重整转增，间隔 2，A ≈ dr：采用 A
+    "000615.SZ",  # 2025-12-29 同上
+    "603559.SH",  # 2024-12-26 除权数据为空的重整转增：B = C = 1，只警告
+    "600375.SH",  # 2024-12-26 同上
+    "002310.SZ",  # 2024-12-30 间隔 2，preClose 没有按除权调整（A = 1），B ≈ dr：保留 B
+    "000678.SZ",  # 2006-07-13 停牌 28 个交易日后除权，A 不干净：保留 B
+]
+"""除权比例核对的样本（duohelm-plugins#19，2026-11-28 实测）。"""
 
 UNIT_SAMPLES = {
     "stock": ["000001.SZ", "600000.SH"],
@@ -68,4 +79,5 @@ def run(source: XtdataSource) -> None:
     source.adj_factors(ADJ_SYMBOLS, *ADJ_RANGE)
     source.bars(ZERO_PRICE, Freq.DAY, *ZERO_PRICE_RANGE)
     source.adj_factors(ZERO_PRICE, *ZERO_PRICE_RANGE)
+    source.adj_factors(EX_CHECK, *ADJ_RANGE)
     source.index_constituents(INDEX, *ADJ_RANGE)
