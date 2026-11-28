@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -24,6 +24,7 @@ from duohelm_xtdata.localfirst import (
 from duohelm_xtdata.source import XtdataSource
 
 SH = ZoneInfo("Asia/Shanghai")
+NY = ZoneInfo("America/New_York")
 SYM = "000001.SZ"
 
 
@@ -35,8 +36,8 @@ def bar(day: date, close: float = 10.0) -> RawBar:
     return RawBar(ms(day), close, close + 0.1, close - 0.1, close, 100.0, close * 1e4, close)
 
 
-# 2026-11-23（周一）起的工作日当作交易日
-DAYS = [d for d in (date(2026, 11, 23) + timedelta(days=i) for i in range(15)) if d.weekday() < 5]
+# 2026-11-02（周一）起的工作日当作交易日
+DAYS = [d for d in (date(2026, 11, 2) + timedelta(days=i) for i in range(35)) if d.weekday() < 5]
 FRI = date(2026, 11, 27)
 MON = date(2026, 11, 30)
 
@@ -50,11 +51,13 @@ def history(last: date) -> list[RawBar]:
 
 
 class FakeStore:
-    """local：本地现有的；remote：下载之后本地的样子（没有列出的证券下载后不变）。"""
+    """local：本地现有的；remote：MiniQMT 那边完整的日线。download 把 remote 里 start 之后的
+    合并进 local（按 start 只下载一段，和 xtdata 一样）。没有 remote 的证券下载后不变。"""
 
     def __init__(self) -> None:
         self.local: dict[str, list[RawBar]] = {}
         self.remote: dict[str, list[RawBar]] = {}
+        self.listings: dict[str, date | None] = {}
         self.download_errors: dict[str, Exception] = {}
         self.read_error: Exception | None = None
         self.calendar: list[date] = list(DAYS)
@@ -65,17 +68,29 @@ class FakeStore:
         self.reads.append((symbol, start))
         if self.read_error is not None:
             raise self.read_error
-        return list(self.local.get(symbol, []))
+        return _from(self.local.get(symbol, []), start)
 
     def download_daily(self, symbol: str, start: str | None) -> None:
         self.downloads.append((symbol, start))
         if symbol in self.download_errors:
             raise self.download_errors[symbol]
         if symbol in self.remote:
-            self.local[symbol] = list(self.remote[symbol])
+            merged = {b.time_ms: b for b in self.local.get(symbol, [])}
+            merged.update({b.time_ms: b for b in _from(self.remote[symbol], start)})
+            self.local[symbol] = [merged[k] for k in sorted(merged)]
 
     def trading_dates(self, market: str) -> list[int]:
         return [ms(d) for d in self.calendar]
+
+    def listing_date(self, symbol: str) -> date | None:
+        return self.listings.get(symbol, DAYS[0])
+
+
+def _from(bars: list[RawBar], start: str | None) -> list[RawBar]:
+    if not start:
+        return list(bars)
+    first = ms(date(int(start[:4]), int(start[4:6]), int(start[6:])))
+    return [b for b in bars if b.time_ms >= first]
 
 
 class Clock:
@@ -288,6 +303,7 @@ def _two_day_history() -> list[RawBar]:
 
 def test_adj_factors_with_fresh_local_data_does_not_download() -> None:
     store = FakeStore()
+    store.listings[SYM] = date(2026, 11, 26)
     store.local[SYM] = _two_day_history()
     source = _source(store)
     df = source.adj_factors([SYM], date(2026, 1, 1), date(2026, 12, 31))
@@ -298,6 +314,7 @@ def test_adj_factors_with_fresh_local_data_does_not_download() -> None:
 def test_bars_then_adj_factors_download_a_stale_symbol_only_once() -> None:
     """修复前每只证券下载两次（bars 一次、adj_factors 一次）。"""
     store = FakeStore()
+    store.listings[SYM] = date(2026, 11, 26)
     store.local[SYM] = [bar(date(2026, 11, 26))]
     store.remote[SYM] = _two_day_history()
     source = _source(store)
@@ -329,12 +346,20 @@ class _Frame:
         return list(enumerate(self._rows))
 
 
+def _upto(last: date) -> list[date]:
+    return [d for d in DAYS if d <= last]
+
+
 class _FakeXt:
     def __init__(self, local: dict[str, list[date]], remote: dict[str, list[date]]) -> None:
         self.local = local
         self.remote = remote
         self.calls: list[tuple[str, Any]] = []
         self.fail_download = False
+
+    def get_instrument_detail(self, symbol: str, iscomplete: bool) -> dict[str, str]:
+        self.calls.append(("detail", symbol))
+        return {"InstrumentName": "x", "OpenDate": "20261102", "ExpireDate": "99999999"}
 
     def get_trading_dates(self, market: str) -> list[int]:
         self.calls.append(("get_trading_dates", market))
@@ -372,7 +397,7 @@ def _live(monkeypatch: pytest.MonkeyPatch, fake: _FakeXt) -> LiveBackend:
 def test_live_backend_reads_one_symbol_per_request_and_skips_download_when_fresh(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fake = _FakeXt({"A.SZ": [FRI], "B.SZ": [FRI]}, {})
+    fake = _FakeXt({"A.SZ": _upto(FRI), "B.SZ": _upto(FRI)}, {})
     live = _live(monkeypatch, fake)
     live.daily("A.SZ", "20261101")
     live.daily("B.SZ", "20261101")
@@ -383,13 +408,13 @@ def test_live_backend_reads_one_symbol_per_request_and_skips_download_when_fresh
 def test_live_backend_downloads_only_stale_symbol_then_rereads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fake = _FakeXt({"A.SZ": [FRI], "B.SZ": [date(2026, 11, 20)]}, {"B.SZ": [FRI]})
+    fake = _FakeXt({"A.SZ": _upto(FRI), "B.SZ": _upto(date(2026, 11, 20))}, {"B.SZ": _upto(FRI)})
     live = _live(monkeypatch, fake)
     live.daily("A.SZ", None)
     bars = live.daily("B.SZ", None)
     assert [c for c in fake.calls if c[0] == "download"] == [("download", "B.SZ")]
     assert [c[1] for c in fake.calls if c[0] == "read"] == [["A.SZ"], ["B.SZ"], ["B.SZ"]]
-    assert len(bars) == 1
+    assert len(bars) == len(_upto(FRI))
 
 
 def test_live_backend_download_failure_raises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -398,3 +423,161 @@ def test_live_backend_download_failure_raises(monkeypatch: pytest.MonkeyPatch) -
     live = _live(monkeypatch, fake)
     with pytest.raises(DailyDownloadError):
         live.daily("A.SZ", None)
+
+
+# ---- 开头完整性：本地开头被截断时，adj_factors 会把第一根当上市日 ----
+
+
+def _tail_only(first: date, last: date) -> list[RawBar]:
+    return [bar(d) for d in DAYS if first <= d <= last]
+
+
+def test_truncated_head_downloads_even_when_tail_is_fresh() -> None:
+    store = FakeStore()
+    store.local[SYM] = _tail_only(date(2026, 11, 20), FRI)
+    store.remote[SYM] = history(FRI)
+    daily, _ = make(store)
+    bars = daily.daily(SYM, None)
+    assert bars == history(FRI)
+    assert store.downloads == [(SYM, None)]
+
+
+def test_complete_head_does_not_download() -> None:
+    store = FakeStore()
+    store.local[SYM] = history(FRI)
+    store.listings[SYM] = date(2026, 11, 2)
+    daily, _ = make(store)
+    daily.daily(SYM, None)
+    assert store.downloads == []
+    # 第一根比上市日晚几天（容差内）仍算完整
+    store.local["B.SZ"] = _tail_only(date(2026, 11, 9), FRI)
+    store.listings["B.SZ"] = date(2026, 11, 3)
+    daily.daily("B.SZ", None)
+    assert store.downloads == []
+
+
+def test_unknown_listing_date_downloads_conservatively_for_full_history() -> None:
+    store = FakeStore()
+    store.local[SYM] = history(FRI)
+    store.listings[SYM] = None
+    daily, _ = make(store)
+    daily.daily(SYM, None)
+    assert len(store.downloads) == 1
+
+
+def test_unknown_listing_date_with_start_does_not_download_when_head_near_start() -> None:
+    store = FakeStore()
+    store.local[SYM] = history(FRI)
+    store.listings[SYM] = None
+    daily, _ = make(store)
+    daily.daily(SYM, "20261102")
+    assert store.downloads == []
+
+
+def test_head_still_truncated_after_download_is_accepted_without_looping() -> None:
+    """MiniQMT 本来就没有更早的数据（如早年的证券）：下载一次后接受，同一交易日不再下载。"""
+    store = FakeStore()
+    store.local[SYM] = _tail_only(date(2026, 11, 20), FRI)
+    store.remote[SYM] = _tail_only(date(2026, 11, 20), FRI)
+    daily, _ = make(store)
+    for _ in range(3):
+        daily.daily(SYM, None)
+    assert len(store.downloads) == 1
+
+
+# ---- 记录按下载覆盖到的 start 判断 ----
+
+
+def test_download_with_start_does_not_cover_later_full_history_request() -> None:
+    """bars 只下载了 start 之后，adj_factors 要全历史时必须再下载一次。"""
+    store = FakeStore()
+    store.listings[SYM] = date(2026, 11, 2)
+    store.local[SYM] = _tail_only(date(2026, 11, 20), date(2026, 11, 25))  # 开头和末尾都缺
+    store.remote[SYM] = history(FRI)
+    daily, _ = make(store)
+    part = daily.daily(SYM, "20261113")  # 下载 11-13 之后
+    assert part[0].time_ms == ms(date(2026, 11, 13))
+    full = daily.daily(SYM, None)
+    assert store.downloads == [(SYM, "20261113"), (SYM, None)]
+    assert full == history(FRI)
+    daily.daily(SYM, None)  # 之后都完整：不再下载
+    daily.daily(SYM, "20261113")
+    assert len(store.downloads) == 2
+
+
+def test_full_history_download_covers_later_partial_request() -> None:
+    store = FakeStore()
+    store.local[SYM] = _tail_only(date(2026, 11, 20), date(2026, 11, 25))
+    store.remote[SYM] = _tail_only(date(2026, 11, 20), date(2026, 11, 25))  # 下载后仍旧
+    daily, _ = make(store)
+    daily.daily(SYM, None)
+    daily.daily(SYM, "20261120")
+    assert len(store.downloads) == 1
+
+
+# ---- 当天的日线可能还没生成：不整天读旧数据 ----
+
+
+def test_missing_only_latest_day_is_retried_later_the_same_day() -> None:
+    store = FakeStore()
+    old = history(date(2026, 11, 26))
+    store.local[SYM] = list(old)
+    store.remote[SYM] = list(old)  # 16:00 MiniQMT 还没生成当天日线
+    daily, clock = make(store, at(FRI, 16))
+    assert daily.daily(SYM, None) == old
+    clock.now = at(FRI, 16, 10)  # 重试间隔之内：不再下载
+    daily.daily(SYM, None)
+    assert len(store.downloads) == 1
+    store.remote[SYM] = history(FRI)  # 之后 MiniQMT 生成了当天日线
+    clock.now = at(FRI, 16, 40)
+    assert daily.daily(SYM, None) == history(FRI)
+    assert len(store.downloads) == 2
+    daily.daily(SYM, None)  # 已是新的：不再下载
+    assert len(store.downloads) == 2
+
+
+def test_stuck_for_many_days_is_not_retried_the_same_day() -> None:
+    store = FakeStore()
+    stuck = history(date(2026, 11, 20))
+    store.local[SYM] = list(stuck)
+    store.remote[SYM] = list(stuck)
+    daily, clock = make(store, at(FRI, 16))
+    daily.daily(SYM, None)
+    clock.now = at(FRI, 23)
+    daily.daily(SYM, None)
+    assert len(store.downloads) == 1
+
+
+# ---- 15:30 边界与时区 ----
+
+
+def test_cutoff_boundary_1529_and_1530() -> None:
+    for now, expect_download in ((at(FRI, 15, 29), False), (at(FRI, 15, 30), True)):
+        store = FakeStore()
+        store.local[SYM] = history(date(2026, 11, 26))
+        daily, _ = make(store, now)
+        daily.daily(SYM, None)
+        assert bool(store.downloads) is expect_download, now
+
+
+@pytest.mark.parametrize(
+    ("now", "expected"),
+    [
+        (datetime(2026, 11, 27, 8, 0, tzinfo=UTC), FRI),  # 上海 11-27 16:00
+        (datetime(2026, 11, 27, 7, 29, tzinfo=UTC), date(2026, 11, 26)),  # 上海 11-27 15:29
+        (datetime(2026, 11, 27, 3, 0, tzinfo=NY), FRI),  # 上海 11-27 16:00
+        (datetime(2026, 11, 29, 20, 0, tzinfo=NY), FRI),  # 上海周一 09:00，还没开盘
+        (datetime(2026, 11, 30, 8, 0, tzinfo=UTC), MON),  # 上海周一 16:00
+    ],
+)
+def test_expected_last_day_converts_to_shanghai(now: datetime, expected: date) -> None:
+    """现在的时间不是上海时区时，先换算到上海再判断日期和是否过了 15:30。"""
+    assert expected_last_day(DAYS, now) == expected
+
+
+def test_live_backend_listing_date_from_instrument(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _FakeXt({}, {})
+    live = _live(monkeypatch, fake)
+    assert live.listing_date("A.SZ") == date(2026, 11, 2)
+    monkeypatch.setattr(LiveBackend, "instrument", lambda self, symbol: None)  # pyright: ignore[reportUnknownLambdaType]
+    assert live.listing_date("A.SZ") is None

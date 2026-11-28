@@ -19,7 +19,7 @@ import sys
 import threading
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -27,6 +27,7 @@ from duohelm_sdk import Address, endpoint
 from duohelm_sdk.context import in_platform
 
 from duohelm_xtdata.config import MiniQMTConfig, load_config
+from duohelm_xtdata.dates import parse_yyyymmdd
 from duohelm_xtdata.localfirst import LocalFirstDaily
 
 BAR_FIELDS = ["time", "open", "high", "low", "close", "volume", "amount", "preClose"]
@@ -235,6 +236,11 @@ class LiveBackend:
 
     def daily(self, symbol: str, start: str | None) -> list[RawBar]:
         return self._local_first.daily(symbol, start)
+
+    def listing_date(self, symbol: str) -> date | None:
+        """合约信息的 OpenDate；没有合约信息或没有 OpenDate 时为 None。"""
+        info = self.instrument(symbol)
+        return parse_yyyymmdd(info.open_date) if info is not None else None
 
     def download_daily(self, symbol: str, start: str | None) -> None:
         self._download(symbol, "1d", start or "")

@@ -10,15 +10,21 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 import polars as pl
 import pytest
 import xt_scenario as sc
 from duohelm_sdk import Freq
 
-from duohelm_xtdata.backend import Instrument, RawBar, RawDivid, ReplayBackend
-from duohelm_xtdata.dates import SHANGHAI, shanghai_date
+from duohelm_xtdata.backend import (
+    Instrument,
+    NotRecordedError,
+    RawBar,
+    RawDivid,
+    ReplayBackend,
+)
+from duohelm_xtdata.dates import SHANGHAI, parse_yyyymmdd, shanghai_date
 from duohelm_xtdata.localfirst import DailyDownloadError, LocalFirstDaily
 from duohelm_xtdata.source import _START_BUFFER as START_BUFFER  # pyright: ignore[reportPrivateUsage]
 from duohelm_xtdata.source import XtdataSource
@@ -27,6 +33,8 @@ pytestmark = pytest.mark.local_data
 
 HIDE_LAST = 3
 """“本地缺最近几根”的模拟：下载前少最后 3 根。"""
+HIDE_FIRST = 200
+"""“本地开头被截断”的模拟：下载前少前 200 根。"""
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -59,11 +67,13 @@ class SimulatedStore:
         empty: set[str] = frozenset(),  # pyright: ignore[reportArgumentType]
         behind: set[str] = frozenset(),  # pyright: ignore[reportArgumentType]
         fail: set[str] = frozenset(),  # pyright: ignore[reportArgumentType]
+        head_cut: set[str] = frozenset(),  # pyright: ignore[reportArgumentType]
     ) -> None:
         self._replay = replay
         self._empty = set(empty)
         self._behind = set(behind)
         self._fail = set(fail)
+        self._head_cut = set(head_cut)
         self.downloaded: set[str] = set()
         self.downloads: list[str] = []
 
@@ -75,6 +85,8 @@ class SimulatedStore:
             return []
         if symbol in self._behind:
             return bars[:-HIDE_LAST]
+        if symbol in self._head_cut:
+            return bars[HIDE_FIRST:]
         return bars
 
     def download_daily(self, symbol: str, start: str | None) -> None:
@@ -85,6 +97,13 @@ class SimulatedStore:
 
     def trading_dates(self, market: str) -> list[int]:
         return self._replay.trading_dates(market)
+
+    def listing_date(self, symbol: str) -> date | None:
+        try:
+            info = self._replay.instrument(symbol)
+        except NotRecordedError:
+            return None
+        return parse_yyyymmdd(info.open_date) if info is not None else None
 
 
 class LocalFirstReplay:
@@ -144,12 +163,13 @@ def test_local_data_missing_path_downloads_once_per_symbol_and_output_identical(
     """（模拟）本地缺数据：一部分证券下载前为空，一部分缺最后几根。每只只下载一次
     （bars 之后的 adj_factors 不再下载），下载后的输出与直接回放逐行一致。"""
     empty = {"000001.SZ", "000004.SZ"}
-    behind = {"600000.SH", "600519.SH"}
-    store = SimulatedStore(replay, empty=empty, behind=behind)
+    behind = {"600000.SH"}
+    head_cut = {"600519.SH"}  # 全历史（adj_factors）才读得到开头
+    store = SimulatedStore(replay, empty=empty, behind=behind, head_cut=head_cut)
     out = _outputs(XtdataSource(LocalFirstReplay(replay, store, _now_after_last_bar(replay))))
     assert sorted(store.downloads) == sorted(store.downloaded)  # 没有重复下载
     assert len(store.downloads) == len(set(store.downloads))
-    assert set(store.downloads) == empty | behind | set(sc.ZERO_PRICE)
+    assert set(store.downloads) == empty | behind | head_cut | set(sc.ZERO_PRICE)
     assert out[0].equals(baseline[0]) and out[1].equals(baseline[1])
 
 
