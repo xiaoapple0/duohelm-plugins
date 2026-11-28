@@ -416,9 +416,10 @@ def test_adj_factors_bonus_plus_gift() -> None:
     assert df["factor"].to_list() == [pytest.approx(2.0)]
 
 
-def test_adj_factors_ignore_zero_price_bars() -> None:
+def test_adj_factors_ignore_zero_price_bars(caplog: pytest.LogCaptureFixture) -> None:
     """000016.SZ 1996-07-17 的情形：已退市证券的日线价格全为 0，配股的参考价
-    (0 - 0 + 6.28 × 0.3) / 1.3 仍为正，旧代码算出比例 0、因子 0，同步被复权因子检查拦下。"""
+    (0 - 0 + 6.28 × 0.3) / 1.3 仍为正，旧代码算出比例 0、因子 0，同步被复权因子检查拦下。
+    丢弃的事件要有警告：因子按 1 处理是“未知”，不能悄悄发生。"""
     fake = FakeBackend()
     d = [date(1996, 7, 4), date(1996, 7, 5), date(1996, 7, 16), date(1996, 7, 17)]
     fake.bars["000016.SZ"] = [_zero_price(day) for day in d]
@@ -426,9 +427,28 @@ def test_adj_factors_ignore_zero_price_bars() -> None:
         RawDivid(ms(d[1]), 0.515, 0.0, 0.0, 0.0, 0.0, 0, 1.042535),
         RawDivid(ms(d[3]), 0.0, 0.0, 0.0, 0.3, 6.28, 0, 1.14532),
     ]
-    df = XtdataSource(fake).adj_factors(["000016.SZ"], date(1990, 1, 1), date(2026, 12, 31))
+    with caplog.at_level("WARNING"):
+        df = XtdataSource(fake).adj_factors(["000016.SZ"], date(1990, 1, 1), date(2026, 12, 31))
     assert df.height == 0
     assert check_adj_factors(df).passed
+    assert any(
+        "000016.SZ" in r.getMessage() and "2 个除权日没有产生复权因子" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_adj_factors_no_warning_for_events_before_listing(caplog: pytest.LogCaptureFixture) -> None:
+    fake = FakeBackend()
+    d = [date(2024, 6, 12), date(2024, 6, 13), date(2024, 6, 14)]
+    fake.bars["000001.SZ"] = [raw(d[1], 10.0), raw(d[2], 9.0)]
+    fake.divids["000001.SZ"] = [
+        RawDivid(ms(d[0]), 1.0, 0.0, 0.0, 0.0, 0.0, 0, 10 / 9),  # 上市前
+        RawDivid(ms(d[2]), 1.0, 0.0, 0.0, 0.0, 0.0, 0, 10 / 9),
+    ]
+    with caplog.at_level("WARNING"):
+        df = XtdataSource(fake).adj_factors(["000001.SZ"], date(2024, 1, 1), date(2024, 12, 31))
+    assert df["date"].to_list() == [d[2]]
+    assert not [r for r in caplog.records if "没有产生复权因子" in r.getMessage()]
 
 
 def test_adj_factors_use_last_valid_close() -> None:

@@ -223,11 +223,18 @@ class XtdataSource:
                 schema=EX_EVENTS_SCHEMA,
                 orient="row",
             )
-            # 价格无效的行在 bars() 里已经警告过，这里不重复
-            closes = _bars_frame(
-                symbol, self._backend.daily(symbol, None), date.min, date.max, warn=False
-            )
+            raw = self._backend.daily(symbol, None)
+            # 价格无效的行不单独警告（bars() 已按请求的区间警告过）；它们导致的事件丢弃在下面警告
+            closes = _bars_frame(symbol, raw, date.min, date.max, warn=False)
             factors = factors_from_events(closes, events, on_invalid="skip")
+            dropped = _dropped_events(raw, events, factors)
+            if dropped:
+                logger.warning(
+                    "%s：%d 个除权日没有产生复权因子（除权前没有价格有效的收盘价或参考价不为正），"
+                    "已丢弃，按没有发生处理",
+                    symbol,
+                    dropped,
+                )
             _check_against_dr(symbol, factors, {shanghai_date(d.time_ms): d.dr for d in divids})
             frames.append(factors.filter(pl.col("date").is_between(start, end)))
         if not frames:
@@ -244,6 +251,17 @@ class XtdataSource:
             raise ValueError(f"不支持的指数 {index!r}，支持：{sorted(INDEX_SECTORS)}")
         rows = [(s, None, None) for s in sorted(set(self._backend.sector(sector)))]
         return pl.DataFrame(rows, schema=INDEX_CONSTITUENTS_SCHEMA, orient="row")
+
+
+def _dropped_events(raw: Sequence[RawBar], events: pl.DataFrame, factors: pl.DataFrame) -> int:
+    """上市以后（第一行原始日线之后）没有产生因子的除权日数。上市前的除权本来就没有因子，不算。
+
+    以原始日线为准，不以价格有效的行为准：价格全为 0 的已退市证券，事件在上市以后，算作丢弃。
+    """
+    produced = set(factors.get_column("date").to_list())
+    listed = min((shanghai_date(b.time_ms) for b in raw), default=None)
+    days = set(events.get_column("date").to_list())
+    return sum(1 for d in days if (listed is None or d > listed) and d not in produced)
 
 
 def _bars_frame(
