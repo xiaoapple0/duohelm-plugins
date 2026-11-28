@@ -31,8 +31,8 @@ xtquant 是原生扩展，DuoHelm 的 Python 层网络拦截管不到它的连�
 | `capabilities()` | — | 只有日线；`lists_delisted=True` |
 | `securities()` | 板块“沪深A股”“京市A股”，合约信息 | `include_delisted=True` 时加上过期合约板块“过期沪深A股”。早年退市的不全（如 PT金田A），DuoHelm 再用 eltdx 补全 |
 | `lookup_securities()` | 合约信息 | 只返回 MiniQMT 有合约信息的代码；查询失败抛 `LookupFailedError`，见下 |
-| `bars()` | `get_market_data_ex`（`fill_data=False`，不复权） | 停牌日没有这一行；丢弃成交量为 0 的行；成交量由手换成股；价格按 0.001 取整 |
-| `adj_factors()` | `get_divid_factors` | 每股派息、送股 + 转增、配股、配股价交给 `duohelm_sdk.adjust.factors_from_events`；与 xtdata 的除权系数 `dr` 交叉核对，相差超过 0.1% 的记警告 |
+| `bars()` | `get_market_data_ex`（`fill_data=False`，不复权） | 停牌日没有这一行；丢弃成交量为 0 的行；丢弃开高低收有任一不是有限正数的行并记警告（xtdata 对已退市证券只给成交量、价格全为 0，退市证券因此没有日线，要靠 eltdx）；成交量由手换成股；价格按 0.001 取整 |
+| `adj_factors()` | `get_divid_factors` | 每股派息、送股 + 转增、配股、配股价交给 `duohelm_sdk.adjust.factors_from_events`；与 xtdata 的除权系数 `dr` 交叉核对，相差超过 0.1% 的记警告；上市以后的除权日没有产生因子（除权前没有价格有效的收盘价，或参考价不为正）的，按证券记警告 |
 | `trading_calendar("CN")` | `get_trading_dates("SH")`、`("SZ")` | 两市交易日的并集 |
 | `index_constituents()` | 指数板块 | **只有当前成分**（普通版取不到历史成分），`in_date`、`out_date` 都为 null |
 

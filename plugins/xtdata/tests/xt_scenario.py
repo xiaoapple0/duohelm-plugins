@@ -40,6 +40,10 @@ CALENDAR_RANGE = (date(2024, 1, 1), date(2024, 12, 31))
 ADJ_SYMBOLS = ["000001.SZ", "600519.SH"]
 ADJ_RANGE = (date(1990, 1, 1), date(2026, 12, 31))
 INDEX = "000300.SH"
+ZERO_PRICE = ["000004.SZ", "000005.SZ", "000016.SZ"]
+"""已退市、xtdata 只给成交量、价格全为 0 的证券（2026-11-28 实测）。000016.SZ 1996-07-17、
+000004.SZ 1993-05-24、000005.SZ 1994-09-23 有配股：价格为 0 时旧代码算出的因子为 0。"""
+ZERO_PRICE_RANGE = (date(1990, 12, 19), date(2026, 12, 31))
 
 UNIT_SAMPLES = {
     "stock": ["000001.SZ", "600000.SH"],
@@ -62,4 +66,6 @@ def run(source: XtdataSource) -> None:
     for symbols in UNIT_SAMPLES.values():
         source.bars(symbols, Freq.DAY, *UNIT_RANGE)
     source.adj_factors(ADJ_SYMBOLS, *ADJ_RANGE)
+    source.bars(ZERO_PRICE, Freq.DAY, *ZERO_PRICE_RANGE)
+    source.adj_factors(ZERO_PRICE, *ZERO_PRICE_RANGE)
     source.index_constituents(INDEX, *ADJ_RANGE)

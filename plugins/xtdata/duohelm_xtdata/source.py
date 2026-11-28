@@ -8,6 +8,9 @@ MiniQMT 的地址是清单里的 endpoint ``miniqmt``，由用户在 DuoHelm 插
 - 日期一律由时间戳按 Asia/Shanghai 换算（见 dates.py）
 - 能直接列出退市证券（``lists_delisted=True``），但早年退市的不全；平台再用 eltdx 补全
 - 停牌日没有这一行；另有少量成交量为 0 的占位行，丢弃
+- 已退市证券的日线只有成交量，开高低收和成交额全为 0（2026-11-28 实测，抽查 41 只退市股
+  全部如此，复权方式换成 front/back 也拿不到可信的价格）。价格不是有限正数的行是“不知道”，
+  不是 0，丢弃并记警告；这类证券的行情要用别的数据源（eltdx）补
 - 成交量单位为手，乘以每手股数换成股
 - 除权数据按每股计；用 duohelm_sdk.adjust.factors_from_events 计算因子，并与 xtdata 的
   除权系数 dr 交叉核对
@@ -17,6 +20,7 @@ MiniQMT 的地址是清单里的 endpoint ``miniqmt``，由用户在 DuoHelm 插
 from __future__ import annotations
 
 import logging
+import math
 from bisect import bisect_left
 from collections.abc import Sequence
 from datetime import date, timedelta
@@ -219,8 +223,18 @@ class XtdataSource:
                 schema=EX_EVENTS_SCHEMA,
                 orient="row",
             )
-            closes = _bars_frame(symbol, self._backend.daily(symbol, None), date.min, date.max)
+            raw = self._backend.daily(symbol, None)
+            # 价格无效的行不单独警告（bars() 已按请求的区间警告过）；它们导致的事件丢弃在下面警告
+            closes = _bars_frame(symbol, raw, date.min, date.max, warn=False)
             factors = factors_from_events(closes, events, on_invalid="skip")
+            dropped = _dropped_events(raw, events, factors)
+            if dropped:
+                logger.warning(
+                    "%s：%d 个除权日没有产生复权因子（除权前没有价格有效的收盘价或参考价不为正），"
+                    "已丢弃，按没有发生处理",
+                    symbol,
+                    dropped,
+                )
             _check_against_dr(symbol, factors, {shanghai_date(d.time_ms): d.dr for d in divids})
             frames.append(factors.filter(pl.col("date").is_between(start, end)))
         if not frames:
@@ -239,13 +253,35 @@ class XtdataSource:
         return pl.DataFrame(rows, schema=INDEX_CONSTITUENTS_SCHEMA, orient="row")
 
 
-def _bars_frame(symbol: str, raw: Sequence[RawBar], start: date, end: date) -> pl.DataFrame:
-    """原始日线 -> BARS_SCHEMA：日期按 Asia/Shanghai 换算，成交量换成股，丢弃成交量为 0 的行。"""
+def _dropped_events(raw: Sequence[RawBar], events: pl.DataFrame, factors: pl.DataFrame) -> int:
+    """上市以后（第一行原始日线之后）没有产生因子的除权日数。上市前的除权本来就没有因子，不算。
+
+    以原始日线为准，不以价格有效的行为准：价格全为 0 的已退市证券，事件在上市以后，算作丢弃。
+    """
+    produced = set(factors.get_column("date").to_list())
+    listed = min((shanghai_date(b.time_ms) for b in raw), default=None)
+    days = set(events.get_column("date").to_list())
+    return sum(1 for d in days if (listed is None or d > listed) and d not in produced)
+
+
+def _bars_frame(
+    symbol: str, raw: Sequence[RawBar], start: date, end: date, *, warn: bool = True
+) -> pl.DataFrame:
+    """原始日线 -> BARS_SCHEMA：日期按 Asia/Shanghai 换算，成交量换成股，丢弃成交量为 0 的行
+    和价格不是有限正数的行（记警告）。
+
+    xtdata 对已退市证券返回的价格全为 0。这些行不能交给平台：平台按主键覆盖写入，会盖掉别的
+    数据源写的真实价格；拿来算复权因子时，除权前收盘价为 0 会让比例为 0，之后的因子全部为 0。
+    """
     per_unit = SHARES_PER_VOLUME_UNIT[security_type(symbol)]
     rows: list[tuple[object, ...]] = []
+    bad_price = 0
     for b in raw:
         day = shanghai_date(b.time_ms)
         if not start <= day <= end or b.volume <= 0:
+            continue
+        if not all(_positive(x) for x in (b.open, b.high, b.low, b.close)):
+            bad_price += 1
             continue
         rows.append(
             (
@@ -259,7 +295,17 @@ def _bars_frame(symbol: str, raw: Sequence[RawBar], start: date, end: date) -> p
                 b.amount,
             )
         )
+    if bad_price and warn:
+        logger.warning(
+            "%s：%d 行日线的价格不是正数（xtdata 对已退市证券只给成交量），已丢弃",
+            symbol,
+            bad_price,
+        )
     return pl.DataFrame(rows, schema=BARS_SCHEMA, orient="row")
+
+
+def _positive(value: float) -> bool:
+    return math.isfinite(value) and value > 0
 
 
 def _check_against_dr(symbol: str, factors: pl.DataFrame, dr: dict[date, float]) -> None:
