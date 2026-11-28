@@ -17,7 +17,9 @@ import importlib.util
 import json
 import sys
 import threading
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -25,6 +27,8 @@ from duohelm_sdk import Address, endpoint
 from duohelm_sdk.context import in_platform
 
 from duohelm_xtdata.config import MiniQMTConfig, load_config
+from duohelm_xtdata.dates import parse_yyyymmdd
+from duohelm_xtdata.localfirst import LocalFirstDaily
 
 BAR_FIELDS = ["time", "open", "high", "low", "close", "volume", "amount", "preClose"]
 ENDPOINT_ID = "miniqmt"
@@ -106,7 +110,9 @@ class Backend(Protocol):
     def instrument(self, symbol: str) -> Instrument | None: ...
 
     def daily(self, symbol: str, start: str | None) -> list[RawBar]:
-        """未复权日线（不补齐停牌日），按时间升序。start 为 YYYYMMDD，None 表示全部历史。"""
+        """未复权日线（不补齐停牌日），按时间升序。start 为 YYYYMMDD，None 表示全部历史。
+
+        LiveBackend 先读本地，缺数据才下载（见 localfirst.py）；下载失败抛异常，不返回旧数据。"""
         ...
 
     def divid(self, symbol: str) -> list[RawDivid]: ...
@@ -122,10 +128,15 @@ class Backend(Protocol):
 class LiveBackend:
     """连接 MiniQMT。第一次取数时才 import xtquant 并连接。"""
 
-    def __init__(self, config: MiniQMTConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: MiniQMTConfig | None = None,
+        now: Callable[[], datetime] | None = None,
+    ) -> None:
         self._config = config
         self._xt: Any = None
         self._lock = threading.Lock()
+        self._local_first = LocalFirstDaily(self, now)
 
     def address(self) -> Address:
         """MiniQMT 的地址。在平台里是用户在插件页确认的地址：还没确认时抛
@@ -224,7 +235,19 @@ class LiveBackend:
         return Instrument(symbol, text("InstrumentName"), text("OpenDate"), text("ExpireDate"))
 
     def daily(self, symbol: str, start: str | None) -> list[RawBar]:
+        return self._local_first.daily(symbol, start)
+
+    def listing_date(self, symbol: str) -> date | None:
+        """合约信息的 OpenDate；没有合约信息或没有 OpenDate 时为 None。"""
+        info = self.instrument(symbol)
+        return parse_yyyymmdd(info.open_date) if info is not None else None
+
+    def download_daily(self, symbol: str, start: str | None) -> None:
         self._download(symbol, "1d", start or "")
+
+    def read_daily(self, symbol: str, start: str | None) -> list[RawBar]:
+        """只读本地已有的日线，不下载。每次只请求一只证券，不合并成大请求（MiniQMT 那台机器的
+        内存是硬约束，见 README）。"""
         data = self._get().get_market_data_ex(
             BAR_FIELDS,
             [symbol],
