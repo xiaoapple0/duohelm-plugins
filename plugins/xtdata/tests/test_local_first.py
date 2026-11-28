@@ -449,11 +449,108 @@ def test_complete_head_does_not_download() -> None:
     daily, _ = make(store)
     daily.daily(SYM, None)
     assert store.downloads == []
-    # 第一根比上市日晚几天（容差内）仍算完整
+    # 上市日是周日：应有的第一天是下一个交易日（周一），第一根正好是它，完整
     store.local["B.SZ"] = _tail_only(date(2026, 11, 9), FRI)
-    store.listings["B.SZ"] = date(2026, 11, 3)
+    store.listings["B.SZ"] = date(2026, 11, 8)
     daily.daily("B.SZ", None)
     assert store.downloads == []
+
+
+def test_head_one_trading_day_late_is_truncated() -> None:
+    """没有容差：第一根比应有的第一天晚一个交易日，就判为截断。"""
+    store = FakeStore()
+    store.local[SYM] = _tail_only(date(2026, 11, 3), FRI)  # 上市日 11-02（周一）
+    store.remote[SYM] = history(FRI)
+    daily, _ = make(store)
+    daily.daily(SYM, None)
+    assert store.downloads == [(SYM, None)]
+
+
+def test_head_late_against_start_by_one_trading_day_is_truncated() -> None:
+    """回补 bars(start=11-18)：query_start=11-13，本地从 11-20 起，缺 11-13..11-19，必须下载。"""
+    store = FakeStore()
+    store.local[SYM] = _tail_only(date(2026, 11, 20), FRI)
+    store.remote[SYM] = history(FRI)
+    daily, _ = make(store)
+    bars = daily.daily(SYM, "20261113")
+    assert bars[0].time_ms == ms(date(2026, 11, 13))
+    assert store.downloads == [(SYM, "20261113")]
+
+
+def test_head_at_first_trading_day_from_start_is_complete() -> None:
+    """start 是周六：应有的第一天是下周一，第一根是周一就完整（不下载、不查合约信息）。"""
+    store = FakeStore()
+    store.listings[SYM] = None
+    store.local[SYM] = _tail_only(date(2026, 11, 9), FRI)
+    daily, _ = make(store)
+    daily.daily(SYM, "20261107")
+    assert store.downloads == []
+
+
+def test_listing_before_calendar_start_uses_first_calendar_day() -> None:
+    store = FakeStore()
+    store.listings[SYM] = date(1991, 4, 3)
+    store.local[SYM] = history(FRI)  # 第一根是日历的第一天
+    daily, _ = make(store)
+    daily.daily(SYM, None)
+    assert store.downloads == []
+
+
+def test_listing_after_calendar_end_is_not_judged_truncated() -> None:
+    store = FakeStore()
+    store.listings[SYM] = date(2027, 1, 4)
+    store.local[SYM] = history(FRI)
+    daily, _ = make(store)
+    daily.daily(SYM, None)
+    assert store.downloads == []
+
+
+def test_head_still_truncated_after_download_logs_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    store = FakeStore()
+    store.listings[SYM] = date(2026, 11, 2)
+    store.local[SYM] = _tail_only(date(2026, 11, 20), FRI)
+    store.remote[SYM] = _tail_only(date(2026, 11, 20), FRI)
+    daily, _ = make(store)
+    with caplog.at_level(logging.WARNING, logger="duohelm_xtdata.localfirst"):
+        daily.daily(SYM, None)
+    assert SYM in caplog.text and "2026-11-20" in caplog.text and "2026-11-02" in caplog.text
+    assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+
+# ---- 下载起点：插件自己不制造中间缺口 ----
+
+
+def test_download_start_is_not_after_last_local_bar() -> None:
+    """本地 11-02..11-10，先从 11-20 起读：下载起点取本地最后一根（11-10），不留中间缺口。"""
+    store = FakeStore()
+    store.listings[SYM] = date(2026, 11, 2)
+    store.local[SYM] = _tail_only(date(2026, 11, 2), date(2026, 11, 10))
+    store.remote[SYM] = history(FRI)
+    daily, _ = make(store)
+    daily.daily(SYM, "20261120")
+    assert store.downloads == [(SYM, "20261110")]
+    full = daily.daily(SYM, None)  # 头尾都对：不再下载，中间也没有缺口
+    assert full == history(FRI)
+    assert len(store.downloads) == 1
+
+
+def test_download_start_is_requested_start_when_local_reaches_it() -> None:
+    store = FakeStore()
+    store.local[SYM] = _tail_only(date(2026, 11, 2), date(2026, 11, 25))
+    store.remote[SYM] = history(FRI)
+    daily, _ = make(store)
+    daily.daily(SYM, "20261120")
+    assert store.downloads == [(SYM, "20261120")]
+
+
+def test_download_start_with_empty_local_is_requested_start() -> None:
+    store = FakeStore()
+    store.remote[SYM] = history(FRI)
+    daily, _ = make(store)
+    daily.daily(SYM, "20261120")
+    assert store.downloads == [(SYM, "20261120")]
 
 
 def test_unknown_listing_date_downloads_conservatively_for_full_history() -> None:
@@ -581,3 +678,13 @@ def test_live_backend_listing_date_from_instrument(monkeypatch: pytest.MonkeyPat
     assert live.listing_date("A.SZ") == date(2026, 11, 2)
     monkeypatch.setattr(LiveBackend, "instrument", lambda self, symbol: None)  # pyright: ignore[reportUnknownLambdaType]
     assert live.listing_date("A.SZ") is None
+
+
+def test_head_one_trading_day_late_against_start_is_truncated() -> None:
+    """start=11-13（周五，交易日），本地从下一个交易日 11-16 起：晚一个交易日，截断。"""
+    store = FakeStore()
+    store.local[SYM] = _tail_only(date(2026, 11, 16), FRI)
+    store.remote[SYM] = history(FRI)
+    daily, _ = make(store)
+    daily.daily(SYM, "20261113")
+    assert store.downloads == [(SYM, "20261113")]

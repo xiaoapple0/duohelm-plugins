@@ -58,42 +58,92 @@ def _now_after_last_bar(replay: ReplayBackend) -> datetime:
     return datetime(last.year, last.month, last.day, 16, tzinfo=SHANGHAI)
 
 
+def _start_ms(start: str) -> int:
+    return int(
+        datetime(int(start[:4]), int(start[4:6]), int(start[6:8]), tzinfo=SHANGHAI).timestamp()
+        * 1000
+    )
+
+
 class SimulatedStore:
-    """下载前缺数据的模拟（不是录制的真实行为）。empty：下载前本地没有；behind：下载前缺最后几根。"""
+    """下载前缺数据的模拟（不是录制的真实行为）。
+
+    - empty：下载前本地没有
+    - behind：{证券: n}，下载前缺最后 n 根（以录制的全历史为准，没有全历史的用读到的那一段）
+    - head_cut：下载前缺前 HIDE_FIRST 根
+
+    下载按 start 只补那一段（和 xtdata 一样）：之后本地 = 下载前的数据 + start 之后的录制数据。
+    所以如果插件按请求的 start 下载，会在“下载前的数据”和 start 之间留下缺口，读取得到的行
+    就会比录制的少。"""
 
     def __init__(
         self,
         replay: ReplayBackend,
         empty: set[str] = frozenset(),  # pyright: ignore[reportArgumentType]
-        behind: set[str] = frozenset(),  # pyright: ignore[reportArgumentType]
+        behind: dict[str, int] | None = None,
         fail: set[str] = frozenset(),  # pyright: ignore[reportArgumentType]
         head_cut: set[str] = frozenset(),  # pyright: ignore[reportArgumentType]
     ) -> None:
         self._replay = replay
         self._empty = set(empty)
-        self._behind = set(behind)
+        self._behind = dict(behind or {})
         self._fail = set(fail)
         self._head_cut = set(head_cut)
+        self._reference: dict[str, list[RawBar]] = {}
+        self._slice: dict[str, list[RawBar]] = {}
+        self._downloaded_from: dict[str, int] = {}
         self.downloaded: set[str] = set()
         self.downloads: list[str] = []
+        self.download_starts: list[tuple[str, str | None]] = []
+
+    def _recorded(self, symbol: str, start: str | None) -> list[RawBar]:
+        try:
+            rows = self._replay.daily(symbol, start)
+        except NotRecordedError:
+            if start is not None:
+                raise
+            # 这只证券没有录制全历史：用最近读到的那一段代替（模拟的局限）
+            return self._slice[symbol]
+        if start is not None:
+            self._slice[symbol] = rows
+        return rows
+
+    def _full(self, symbol: str) -> list[RawBar]:
+        """“下载前缺多少”以录制的全历史为准；没有全历史的用读到的那一段。"""
+        if symbol not in self._reference:
+            try:
+                self._reference[symbol] = self._replay.daily(symbol, None)
+            except NotRecordedError:
+                self._reference[symbol] = self._slice[symbol]
+        return self._reference[symbol]
+
+    def _base_keeps(self, symbol: str, row: RawBar) -> bool:
+        ref = self._full(symbol)
+        if symbol in self._empty:
+            return False
+        if symbol in self._behind:
+            return row.time_ms < ref[-self._behind[symbol]].time_ms
+        if symbol in self._head_cut:
+            return row.time_ms >= ref[HIDE_FIRST].time_ms
+        return True
 
     def read_daily(self, symbol: str, start: str | None) -> list[RawBar]:
-        bars = self._replay.daily(symbol, start)
-        if symbol in self.downloaded:
-            return bars
-        if symbol in self._empty:
-            return []
-        if symbol in self._behind:
-            return bars[:-HIDE_LAST]
-        if symbol in self._head_cut:
-            return bars[HIDE_FIRST:]
-        return bars
+        rows = self._recorded(symbol, start)
+        from_ms = self._downloaded_from.get(symbol)
+        return [
+            r
+            for r in rows
+            if self._base_keeps(symbol, r) or (from_ms is not None and r.time_ms >= from_ms)
+        ]
 
     def download_daily(self, symbol: str, start: str | None) -> None:
         self.downloads.append(symbol)
+        self.download_starts.append((symbol, start))
         if symbol in self._fail:
             raise TimeoutError("模拟的下载失败")
         self.downloaded.add(symbol)
+        from_ms = 0 if start is None else _start_ms(start)
+        self._downloaded_from[symbol] = min(from_ms, self._downloaded_from.get(symbol, from_ms))
 
     def trading_dates(self, market: str) -> list[int]:
         return self._replay.trading_dates(market)
@@ -163,13 +213,19 @@ def test_local_data_missing_path_downloads_once_per_symbol_and_output_identical(
     """（模拟）本地缺数据：一部分证券下载前为空，一部分缺最后几根。每只只下载一次
     （bars 之后的 adj_factors 不再下载），下载后的输出与直接回放逐行一致。"""
     empty = {"000001.SZ", "000004.SZ"}
-    behind = {"600000.SH"}
+    behind = {"600000.SH": HIDE_LAST}
     head_cut = {"600519.SH"}  # 全历史（adj_factors）才读得到开头
     store = SimulatedStore(replay, empty=empty, behind=behind, head_cut=head_cut)
     out = _outputs(XtdataSource(LocalFirstReplay(replay, store, _now_after_last_bar(replay))))
-    assert sorted(store.downloads) == sorted(store.downloaded)  # 没有重复下载
-    assert len(store.downloads) == len(set(store.downloads))
-    assert set(store.downloads) == empty | behind | head_cut | set(sc.ZERO_PRICE)
+    # 每只下载一次；平安银行（下载前为空）例外：bars 只下载了最近一段，adj_factors 要全历史，
+    # 开头仍缺，再下载一次（之后不再下载）
+    assert store.download_starts == [
+        ("000001.SZ", "20260827"),
+        ("600000.SH", "20260827"),
+        ("000001.SZ", None),
+        ("600519.SH", None),
+        *[(sym, None) for sym in sc.ZERO_PRICE],
+    ]
     assert out[0].equals(baseline[0]) and out[1].equals(baseline[1])
 
 
@@ -177,7 +233,7 @@ def test_simulated_stale_data_differs_from_recorded(replay: ReplayBackend) -> No
     """对照：模拟里“缺最后几根”的本地数据确实比录制的少，说明上面的测试检查的是真东西。"""
     symbol = sc.UNIT_SAMPLES["stock"][0]
     start = (sc.UNIT_RANGE[0] - START_BUFFER).strftime("%Y%m%d")
-    store = SimulatedStore(replay, behind={symbol})
+    store = SimulatedStore(replay, behind={symbol: HIDE_LAST})
     assert len(store.read_daily(symbol, start)) == len(replay.daily(symbol, start)) - HIDE_LAST
 
 
@@ -198,3 +254,17 @@ def test_download_failure_is_not_empty_in_replay(replay: ReplayBackend) -> None:
     source = XtdataSource(LocalFirstReplay(replay, store, _now_after_last_bar(replay)))
     with pytest.raises(DailyDownloadError):
         source.bars([sc.LISTED], Freq.DAY, *sc.LISTED_RANGE)
+
+
+def test_partial_download_leaves_no_gap_in_the_middle(replay: ReplayBackend) -> None:
+    """（模拟）本地只到半年前：先读最近一段（bars），再读全历史（adj_factors）。下载起点取本地
+    最后一根，不取请求的 start，所以全历史读到的行与录制的完全一致，中间没有缺口。"""
+    symbol = sc.LISTED
+    store = SimulatedStore(replay, behind={symbol: 120})
+    backend = LocalFirstReplay(replay, store, _now_after_last_bar(replay))
+    recent = "20260827"
+    assert backend.daily(symbol, recent) == replay.daily(symbol, recent)
+    assert backend.daily(symbol, None) == replay.daily(symbol, None)
+    (_, first_start) = store.download_starts[0]
+    assert first_start is not None and first_start < recent  # 起点早于请求的 start
+    assert len(store.downloads) == 1  # 全历史读取时头尾都对，不再下载
